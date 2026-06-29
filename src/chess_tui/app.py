@@ -316,7 +316,14 @@ class ChessApp(App):
         if self._state.is_game_over():
             move_list.append(ListItem(Label(f"Game over — {self._state.result()}")))
             return
-        for move in self._state.legal_moves():
+        # Sort by SAN (case-insensitive) so the list is stable and
+        # predictable: pawn moves first (a3, a4, b3, b4, …), then piece
+        # moves alphabetically (Ba3, Bb5, …).
+        moves = sorted(
+            self._state.legal_moves(),
+            key=lambda m: self._state.san_for(m).lower(),
+        )
+        for move in moves:
             item = ListItem(Label(self._state.san_for(move)))
             setattr(item, _MOVE_ATTR, move.uci())
             move_list.append(item)

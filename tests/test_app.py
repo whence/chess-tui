@@ -112,14 +112,14 @@ async def test_default_focus_is_move_list_not_input() -> None:
 
 async def test_enter_on_move_list_applies_highlighted_move() -> None:
     """The default action for Enter should be 'pick the highlighted move'
-    via the move list, not the move input. The first item in the list is
-    the first legal move python-chess yields (Nh3 at the start)."""
+    via the move list, not the move input. The list is sorted alphabetically
+    by SAN (case-insensitive), so the first item is 'a3' at the start."""
     async with run_app() as (app, pilot):
         await pilot.pause()
         # Move list has focus by default; Enter picks the highlighted item.
         await pilot.press("enter")
         await pilot.pause()
-        assert app._state.san_history() == ["Nh3"]
+        assert app._state.san_history() == ["a3"]
 
 
 # ---- move input -------------------------------------------------------------
@@ -232,6 +232,21 @@ async def test_move_list_is_populated_with_legal_moves() -> None:
         assert "e4" in labels
         assert "Nf3" in labels
         assert "Nc3" in labels
+
+
+async def test_move_list_is_sorted_alphabetically_by_san() -> None:
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        labels = move_labels(app)
+        # Sort is case-insensitive: 'a3' < 'Na3' < 'Nc3' < 'Nf3' < …
+        assert labels == sorted(labels, key=str.lower), (
+            f"move list not sorted: {labels}"
+        )
+        # Sanity across the case boundary.
+        assert labels.index("a3") < labels.index("Na3")
+        assert labels.index("Na3") < labels.index("Nc3")
+        assert labels.index("Nc3") < labels.index("Nf3")
+        assert labels.index("Nf3") < labels.index("Nh3")
 
 
 async def test_typing_from_square_shows_destinations() -> None:
