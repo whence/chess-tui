@@ -186,6 +186,22 @@ async def test_game_over_displays_result() -> None:
         assert "0-1" in title_text(app)
 
 
+# ---- board centering -------------------------------------------------------
+
+
+async def test_board_is_horizontally_centered_in_board_area() -> None:
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        ba = app.query_one("#board-area")
+        board = app.query_one("#board")
+        # The board (24 chars wide) should sit in the middle of board-area.
+        expected_x = ba.region.x + (ba.region.width - board.region.width) // 2
+        assert board.region.x == expected_x, (
+            f"board at x={board.region.x}, expected x={expected_x} "
+            f"(ba width={ba.region.width})"
+        )
+
+
 # ---- board widget refresh ---------------------------------------------------
 
 

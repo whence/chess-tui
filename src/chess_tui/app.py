@@ -56,20 +56,25 @@ class BoardWidget(Static):
 
     DEFAULT_CSS: ClassVar[str] = """
     BoardWidget {
-        height: auto;
-        width: auto;
+        height: 8;
+        width: 24;
     }
     #board-grid {
         grid-size: 8 8;
         grid-gutter: 0;
-        width: auto;
-        height: auto;
+        width: 24;
+        height: 8;
     }
     Cell {
         width: 3;
         height: 1;
         content-align: center middle;
         text-style: bold;
+    }
+    CoordinateBar {
+        width: 24;
+        height: 1;
+        content-align: center middle;
     }
     """
 
@@ -126,12 +131,19 @@ class ChessApp(App):
         height: 1fr;
     }
     #board-area {
+        layout: horizontal;
+        width: 1fr;
+        height: 100%;
+        align: center middle;
+    }
+    #board-inner {
         layout: vertical;
         width: auto;
+        height: auto;
     }
     #side {
         layout: vertical;
-        width: 1fr;
+        width: 32;
         padding: 1 1;
     }
     #status {
@@ -169,10 +181,11 @@ class ChessApp(App):
     def compose(self) -> ComposeResult:
         yield TextLine("Chess TUI — White to move", id="title")
         with Horizontal(id="main"):
-            with Vertical(id="board-area"):
-                yield CoordinateBar(id="files-top")
-                yield BoardWidget(id="board")
-                yield CoordinateBar(id="files-bot")
+            with Horizontal(id="board-area"):
+                with Vertical(id="board-inner"):
+                    yield CoordinateBar(id="files-top")
+                    yield BoardWidget(id="board")
+                    yield CoordinateBar(id="files-bot")
             with Vertical(id="side"):
                 yield TextLine("", id="status")
                 yield ListView(id="move-list")
