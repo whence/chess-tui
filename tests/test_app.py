@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import chess
 import pytest
 
-from chess_tui.app import Cell, ChessApp, TextLine
+from chess_tui.app import Cell, ChessApp, Legend, TextLine
 from chess_tui.state import BoardState
 from chess_tui.themes import THEME
 from textual.widgets import Input, ListView
@@ -197,6 +197,36 @@ async def test_game_over_displays_result() -> None:
         await pilot.pause()
         assert "Game over" in title_text(app)
         assert "0-1" in title_text(app)
+
+
+# ---- legend -----------------------------------------------------------------
+
+
+async def test_legend_shows_white_and_black_pieces() -> None:
+    from io import StringIO
+    from rich.console import Console
+    from rich.table import Table as RichTable
+
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        legend = app.query_one(Legend)
+        # Find the Rich Table on the widget.
+        table = None
+        for attr in dir(legend):
+            if not attr.startswith("_"):
+                continue
+            val = getattr(legend, attr, None)
+            if isinstance(val, RichTable):
+                table = val
+                break
+        assert table is not None, "Legend widget has no Rich Table attached"
+        buf = StringIO()
+        Console(file=buf, width=80, force_terminal=False, color_system=None).print(table)
+        text = buf.getvalue()
+        assert "White" in text
+        assert "Black" in text
+        for g in "♙♘♗♖♕♔♟♞♝♜♛♚":
+            assert g in text, f"legend missing glyph {g!r}"
 
 
 # ---- board centering -------------------------------------------------------
