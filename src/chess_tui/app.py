@@ -13,14 +13,20 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 
 from .pieces import glyph
 from .state import BoardState, IllegalMoveError
+from .themes import DEFAULT as DEFAULT_THEME, Theme
 
 
 # Marker attribute attached to ListItems to map them back to their move UCI.
 _MOVE_ATTR = "_move_uci"
 
 
-CELL_LIGHT = "white"
-CELL_DARK = "blue"
+def _parse_color(spec: str) -> str:
+    """Resolve a color spec to a string Textual's CSS understands.
+
+    Accepts hex like ``#769656`` and named CSS colors. The checkered theme
+    uses hex strings; this helper lets us hand them to ``styles.background``.
+    """
+    return spec
 
 
 class Cell(Static):
@@ -32,10 +38,24 @@ class Cell(Static):
         self.col = col
         self.glyph: str = " "
 
-    def set_piece(self, piece: chess.Piece | None, *, light: bool) -> None:
-        style = CELL_LIGHT if light else CELL_DARK
-        self.styles.background = style
-        self.glyph = glyph(piece) or " "
+    def set_piece(
+        self,
+        piece: chess.Piece | None,
+        *,
+        light: bool,
+        light_bg: str,
+        dark_bg: str,
+        light_piece_fg: str,
+        dark_piece_fg: str,
+    ) -> None:
+        bg = light_bg if light else dark_bg
+        self.styles.background = _parse_color(bg)
+        if piece is None:
+            self.glyph = " "
+            self.styles.color = ""
+        else:
+            self.glyph = glyph(piece) or " "
+            self.styles.color = dark_piece_fg if piece.color == chess.BLACK else light_piece_fg
         self.update(self.glyph)
 
 
@@ -52,7 +72,7 @@ class TextLine(Static):
 
 
 class BoardWidget(Static):
-    """Renders the 8x8 board as a grid of Cells."""
+    """Renders the 8x8 board as a grid of Cells, themed by a :class:`Theme`."""
 
     DEFAULT_CSS: ClassVar[str] = """
     BoardWidget {
@@ -78,6 +98,10 @@ class BoardWidget(Static):
     }
     """
 
+    def __init__(self, theme: Theme | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.theme: Theme = theme or DEFAULT_THEME
+
     def compose(self) -> ComposeResult:
         with Grid(id="board-grid"):
             for row in range(8):
@@ -85,13 +109,25 @@ class BoardWidget(Static):
                     yield Cell(row, col)
 
     def refresh_board(self, state: BoardState) -> None:
+        # Theme stores specs like "bg:#769656" — strip the "bg:" prefix.
+        light_bg = self.theme.light_square.removeprefix("bg:")
+        dark_bg = self.theme.dark_square.removeprefix("bg:")
+        light_fg = self.theme.light_piece.removeprefix("fg:")
+        dark_fg = self.theme.dark_piece.removeprefix("fg:")
         for row in range(8):
             for col in range(8):
                 square = state.square_at(row, col)
                 piece = state.piece_at(square)
                 light = (row + col) % 2 == 0
                 cell = self.query_one(f"#cell-{row}-{col}", Cell)
-                cell.set_piece(piece, light=light)
+                cell.set_piece(
+                    piece,
+                    light=light,
+                    light_bg=light_bg,
+                    dark_bg=dark_bg,
+                    light_piece_fg=light_fg,
+                    dark_piece_fg=dark_fg,
+                )
 
 
 class CoordinateBar(Static):

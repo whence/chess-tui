@@ -13,6 +13,7 @@ import pytest
 
 from chess_tui.app import Cell, ChessApp, TextLine
 from chess_tui.state import BoardState
+from chess_tui.themes import CHECKERED, DEFAULT
 from textual.widgets import Input, ListView
 
 
@@ -227,3 +228,50 @@ async def test_board_widget_refresh_reflects_state_changes() -> None:
         app.refresh_all()
         await pilot.pause()
         assert piece_at_display(app, 5, 5) == "♘"
+
+
+# ---- themes -----------------------------------------------------------------
+
+
+async def test_default_theme_is_cli_chess_default() -> None:
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        board = app.query_one("#board")
+        assert board.theme is DEFAULT
+
+
+async def test_checkered_theme_uses_clc_colors() -> None:
+    """The checkered theme should match command-line-chess's tileColors:
+    - (x+y) % 2 == 0 → #769656 (dark green)
+    - (x+y) % 2 == 1 → #BACA44 (light olive)
+    """
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        board = app.query_one("#board")
+        board.theme = CHECKERED
+        board.refresh_board(app._state)
+        await pilot.pause()
+        # Cell (0, 0) has (row+col) % 2 == 0 → tileColors[0] = #769656.
+        cell_00 = app.query_one("#cell-0-0", Cell)
+        r, g, b = (
+            cell_00.styles.background.r,
+            cell_00.styles.background.g,
+            cell_00.styles.background.b,
+        )
+        assert (r, g, b) == (0x76, 0x96, 0x56), (
+            f"expected #769656, got rgb({r}, {g}, {b})"
+        )
+        # Cell (0, 1) has (row+col) % 2 == 1 → tileColors[1] = #BACA44.
+        cell_01 = app.query_one("#cell-0-1", Cell)
+        r, g, b = (
+            cell_01.styles.background.r,
+            cell_01.styles.background.g,
+            cell_01.styles.background.b,
+        )
+        assert (r, g, b) == (0xBA, 0xCA, 0x44), (
+            f"expected #BACA44, got rgb({r}, {g}, {b})"
+        )
+        # And the rendered SVG should carry those colors too.
+        svg = app.export_screenshot()
+        assert "769656" in svg.lower()
+        assert "baca44" in svg.lower()
