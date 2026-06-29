@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import chess
 import pytest
 
-from chess_tui.app import Cell, ChessApp, Legend, TextLine
+from chess_tui.app import Cell, ChessApp, FileBar, Legend, RankBar, TextLine
 from chess_tui.state import BoardState
 from chess_tui.themes import THEME
 from textual.widgets import Input, ListView
@@ -304,17 +304,88 @@ async def test_legend_shows_white_and_black_pieces() -> None:
 # ---- board centering -------------------------------------------------------
 
 
-async def test_board_is_horizontally_centered_in_board_area() -> None:
+async def test_board_block_is_horizontally_centered_in_board_area() -> None:
+    """The whole board block (rank column + cells + file bar = 27 wide)
+    should sit in the middle of board-area."""
     async with run_app() as (app, pilot):
         await pilot.pause()
         ba = app.query_one("#board-area")
-        board = app.query_one("#board")
-        # The board (24 chars wide) should sit in the middle of board-area.
-        expected_x = ba.region.x + (ba.region.width - board.region.width) // 2
-        assert board.region.x == expected_x, (
-            f"board at x={board.region.x}, expected x={expected_x} "
-            f"(ba width={ba.region.width})"
+        bi = app.query_one("#board-inner")
+        # board-inner is 27 wide (3 for rank + 24 cells); center it.
+        expected_x = ba.region.x + (ba.region.width - bi.region.width) // 2
+        assert bi.region.x == expected_x, (
+            f"board-inner at x={bi.region.x}, expected x={expected_x} "
+            f"(ba width={ba.region.width}, bi width={bi.region.width})"
         )
+
+
+# ---- coordinates -----------------------------------------------------------
+
+
+def _bar_text(widget) -> str:
+    from io import StringIO
+    from rich.console import Console
+
+    buf = StringIO()
+    Console(file=buf, width=40, force_terminal=False, color_system=None).print(widget.render())
+    return buf.getvalue()
+
+
+async def test_rank_bar_shows_8_to_1_unflipped() -> None:
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        rb = app.query_one("#ranks-left", RankBar)
+        text = _bar_text(rb)
+        lines = text.splitlines()
+        assert lines == [f"  {n}" for n in range(8, 0, -1)], lines
+
+
+async def test_rank_bar_flips_to_1_to_8() -> None:
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        app.action_flip()
+        await pilot.pause()
+        rb = app.query_one("#ranks-left", RankBar)
+        text = _bar_text(rb)
+        lines = text.splitlines()
+        assert lines == [f"  {n}" for n in range(1, 9)], lines
+
+
+async def test_file_bar_shows_a_to_h_unflipped() -> None:
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        fb = app.query_one("#files-bot", FileBar)
+        text = _bar_text(fb).rstrip("\n")
+        # 27 chars total: 3-char blank + 8 file labels, each in a 3-char cell
+        assert len(text) == 27
+        assert text == "   " + "".join(f" {c} " for c in "abcdefgh"), text
+
+
+async def test_file_bar_flips_to_h_to_a() -> None:
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        app.action_flip()
+        await pilot.pause()
+        fb = app.query_one("#files-bot", FileBar)
+        text = _bar_text(fb).rstrip("\n")
+        assert text == "   " + "".join(f" {c} " for c in "hgfedcba"), text
+
+
+async def test_file_labels_align_with_board_cells() -> None:
+    """Each file label is centered in a 3-char cell whose center matches
+    the center of the corresponding board cell."""
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        fb = app.query_one("#files-bot", FileBar)
+        bw = app.query_one("#board")
+        text = _bar_text(fb).rstrip("\n")
+        # File label at index 3 + c*3 + 1 should match board cell c center
+        # (board cell c is at x=bw.region.x + c*3 + 1).
+        for c in range(8):
+            label_char = text[3 + c * 3 + 1]
+            assert label_char == "abcdefgh"[c], (
+                f"file {c} mismatch: got {label_char!r}"
+            )
 
 
 # ---- board widget refresh ---------------------------------------------------

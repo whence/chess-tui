@@ -160,21 +160,50 @@ class BoardWidget(Static):
                 )
 
 
-class CoordinateBar(Static):
-    """Renders file/rank labels around the board."""
+class RankBar(Static):
+    """Vertical column of rank labels on the left of the board.
+
+    Each rank is right-aligned in a 3-char cell so it lines up with the
+    first column of board cells. The cell is " 8 " (rank right-aligned in
+    2 chars, then a 1-char gap to the board edge) — the gap keeps the
+    digit visually adjacent to the board column it labels.
+    """
 
     DEFAULT_CSS: ClassVar[str] = """
-    CoordinateBar {
-        height: 1;
-        content-align: center middle;
+    RankBar {
+        width: 3;
+        height: 8;
     }
     """
 
-    def update_for(self, state: BoardState, *, axis: str) -> None:
-        if axis == "files":
-            self.update(" ".join(state.file_label(c) for c in range(8)))
-        else:
-            self.update(" ".join(state.rank_label(r) for r in range(8)))
+    def refresh_ranks(self, state: BoardState) -> None:
+        # 8 lines, each 3 chars wide, with the rank right-aligned.
+        lines = [f" {state.rank_label(r):>2}" for r in range(8)]
+        self.update("\n".join(lines))
+
+
+class FileBar(Static):
+    """File labels (a, b, …, h) below the board, aligned with the cells.
+
+    The first 3-char cell is a blank that lines up with the rank column
+    on the left, so the 8 file labels (each in their own 3-char cell)
+    sit directly under their corresponding board columns.
+    """
+
+    DEFAULT_CSS: ClassVar[str] = """
+    FileBar {
+        width: 27;
+        height: 1;
+    }
+    """
+
+    def refresh_files(self, state: BoardState) -> None:
+        # 3-char blank for the rank column, then 8 file labels each
+        # centered in a 3-char cell: " X ".
+        parts = ["   "]  # blank for rank-column alignment
+        for c in range(8):
+            parts.append(f" {state.file_label(c)} ")
+        self.update("".join(parts))
 
 
 class ChessApp(App):
@@ -203,6 +232,11 @@ class ChessApp(App):
     }
     #board-inner {
         layout: vertical;
+        width: 27;
+        height: 9;
+    }
+    #board-row {
+        layout: horizontal;
         width: auto;
         height: auto;
     }
@@ -248,9 +282,10 @@ class ChessApp(App):
         with Horizontal(id="main"):
             with Horizontal(id="board-area"):
                 with Vertical(id="board-inner"):
-                    yield CoordinateBar(id="files-top")
-                    yield BoardWidget(id="board")
-                    yield CoordinateBar(id="files-bot")
+                    with Horizontal(id="board-row"):
+                        yield RankBar(id="ranks-left")
+                        yield BoardWidget(id="board")
+                    yield FileBar(id="files-bot")
             with Vertical(id="side"):
                 yield TextLine("", id="status")
                 yield ListView(id="move-list")
@@ -278,8 +313,8 @@ class ChessApp(App):
     def refresh_all(self) -> None:
         board = self.query_one("#board", BoardWidget)
         board.refresh_board(self._state)
-        self.query_one("#files-top", CoordinateBar).update_for(self._state, axis="files")
-        self.query_one("#files-bot", CoordinateBar).update_for(self._state, axis="files")
+        self.query_one("#ranks-left", RankBar).refresh_ranks(self._state)
+        self.query_one("#files-bot", FileBar).refresh_files(self._state)
         self._refresh_title()
         self._refresh_status()
         self._refresh_move_list()
