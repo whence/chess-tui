@@ -13,7 +13,7 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 
 from .pieces import glyph
 from .state import BoardState, IllegalMoveError
-from .themes import DEFAULT as DEFAULT_THEME, Theme
+from .themes import THEME, Theme
 
 
 # Marker attribute attached to ListItems to map them back to their move UCI.
@@ -23,8 +23,7 @@ _MOVE_ATTR = "_move_uci"
 def _parse_color(spec: str) -> str:
     """Resolve a color spec to a string Textual's CSS understands.
 
-    Accepts hex like ``#769656`` and named CSS colors. The checkered theme
-    uses hex strings; this helper lets us hand them to ``styles.background``.
+    Accepts hex like ``#769656`` and named CSS colors.
     """
     return spec
 
@@ -100,7 +99,7 @@ class BoardWidget(Static):
 
     def __init__(self, theme: Theme | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.theme: Theme = theme or DEFAULT_THEME
+        self.theme: Theme = theme or THEME
 
     def compose(self) -> ComposeResult:
         with Grid(id="board-grid"):
@@ -109,11 +108,10 @@ class BoardWidget(Static):
                     yield Cell(row, col)
 
     def refresh_board(self, state: BoardState) -> None:
-        # Theme stores specs like "bg:#769656" — strip the "bg:" prefix.
-        light_bg = self.theme.light_square.removeprefix("bg:")
-        dark_bg = self.theme.dark_square.removeprefix("bg:")
-        light_fg = self.theme.light_piece.removeprefix("fg:")
-        dark_fg = self.theme.dark_piece.removeprefix("fg:")
+        light_bg = self.theme.light_square
+        dark_bg = self.theme.dark_square
+        light_fg = self.theme.light_piece
+        dark_fg = self.theme.dark_piece
         for row in range(8):
             for col in range(8):
                 square = state.square_at(row, col)
