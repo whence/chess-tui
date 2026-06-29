@@ -8,10 +8,11 @@ import chess
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Horizontal, Vertical
-from textual.reactive import reactive
 from textual.widgets import Input, Label, ListItem, ListView, Static
 
+from . import net
 from .pieces import glyph
+from .player import LocalPlayer, NetworkPlayer, Player
 from .state import BoardState, IllegalMoveError
 from .themes import THEME, Theme
 
@@ -269,11 +270,20 @@ class ChessApp(App):
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
 
-    state: reactive[BoardState] = reactive(BoardState, init=False)
 
-    def __init__(self, state: BoardState | None = None) -> None:
+    def __init__(
+        self,
+        state: BoardState | None = None,
+        players: dict[chess.Color, Player] | None = None,
+    ) -> None:
         super().__init__()
         self._state: BoardState = state or BoardState()
+        # Default: both sides are local (human-driven). Override per-side
+        # by passing a NetworkPlayer(url) for that color.
+        self._players: dict[chess.Color, Player] = players or {
+            chess.WHITE: LocalPlayer(color=chess.WHITE),
+            chess.BLACK: LocalPlayer(color=chess.BLACK),
+        }
 
     # ---- composition -----------------------------------------------------
 
@@ -298,17 +308,52 @@ class ChessApp(App):
                 )
 
     def on_mount(self) -> None:
-        self.state = self._state  # triggers watch_state -> refresh_all
-        # Default focus is the move list so Enter picks the highlighted move
-        # (Tab to the input below if you want to type a custom one).
+        # Render the initial position and focus the move list.
+        self.refresh_all()
         move_list = self.query_one("#move-list", ListView)
         move_list.index = 0
         move_list.focus()
 
     # ---- rendering -------------------------------------------------------
 
-    def watch_state(self, _old: BoardState, _new: BoardState) -> None:
-        self.refresh_all()
+
+    def _maybe_request_network_move(self) -> None:
+        """If it's a network player's turn, fire off an async request.
+
+        Uses ``run_worker(exclusive=True)`` so a new state change cancels any
+        in-flight request (e.g. on reset). The local player's turn is a
+        no-op here — the TUI's input handling does the work.
+        """
+        if self._state.is_game_over():
+            return
+        player = self._players[self._state.turn()]
+        if not isinstance(player, NetworkPlayer):
+            return
+        self.run_worker(
+            self._do_network_move(player),
+            exclusive=True,
+            name="network-move",
+        )
+
+    async def _do_network_move(self, player: NetworkPlayer) -> None:
+        # Re-check at fetch-time: the user might have reset or quit while
+        # we were waiting.
+        if self._state.is_game_over():
+            return
+        if self._players[self._state.turn()] is not player:
+            return
+        try:
+            move = await player.choose_move(self._state.board)
+        except (IllegalMoveError, net.NetworkError) as exc:
+            self._set_status_error(f"network player error: {exc}")
+            return
+        try:
+            self._state.apply_move(move)
+        except IllegalMoveError as exc:
+            self._set_status_error(f"network player returned bad move: {exc}")
+            return
+        # _commit so the UI re-renders and we may schedule the next turn.
+        self._commit()
 
     def refresh_all(self) -> None:
         board = self.query_one("#board", BoardWidget)
@@ -342,7 +387,15 @@ class ChessApp(App):
         status = self.query_one("#status", TextLine)
         history = self._state.san_history()
         last = f"Last: {history[-1]}" if history else "Last: —"
-        status.set_text(f"Move {self._state.fullmove_number()} • {last} • FEN: {self._state.fen()}")
+        turn = self._state.turn()
+        player = self._players[turn]
+        side = self._state.turn_name()
+        if isinstance(player, NetworkPlayer) and not self._state.is_game_over():
+            side += f" (network @ {player.url})"
+        status.set_text(
+            f"Move {self._state.fullmove_number()} • {side} to move • "
+            f"Last: {last} • FEN: {self._state.fen()}"
+        )
 
     def _refresh_move_list(self) -> None:
         move_list = self.query_one("#move-list", ListView)
@@ -378,13 +431,25 @@ class ChessApp(App):
 
     # ---- actions ---------------------------------------------------------
 
+    def _commit(self) -> None:
+        """Re-render after a state mutation and consider the next turn.
+
+        Earlier this went through a Textual ``reactive`` for the same
+        effect, but reactives dedupe assignments when the value compares
+        equal — and ``self._state`` is always the same object reference,
+        so the watcher never fired on in-place mutation. Doing it by hand
+        is more straightforward.
+        """
+        self.refresh_all()
+        self._maybe_request_network_move()
+
     def action_flip(self) -> None:
         self._state.flip()
-        self.refresh_all()
+        self._commit()
 
     def action_reset(self) -> None:
         self._state.reset()
-        self.refresh_all()
+        self._commit()
 
     # ---- input handling --------------------------------------------------
 
@@ -405,7 +470,7 @@ class ChessApp(App):
                 return
             self._set_status_error(f"unrecognized input: {text!r}")
             return
-        self.refresh_all()
+        self._commit()
 
     def _try_apply(self, text: str, *, is_uci: bool = False) -> None:
         try:
@@ -419,7 +484,7 @@ class ChessApp(App):
         except (IllegalMoveError, ValueError, chess.InvalidMoveError, chess.AmbiguousMoveError) as exc:
             self._set_status_error(str(exc))
             return
-        self.refresh_all()
+        self._commit()
 
     def _show_destinations(self, square: chess.Square) -> None:
         move_list = self.query_one("#move-list", ListView)
@@ -439,8 +504,38 @@ class ChessApp(App):
         status.set_text(msg)
 
 
-def main() -> None:
-    ChessApp().run()
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="chess-tui",
+        description="TUI chess app. Pass --white / --black to route that "
+        "side to a network player (see openapi/chess-tui-net.yaml).",
+    )
+    parser.add_argument(
+        "--white",
+        metavar="URL",
+        help="URL of a network player to use for white "
+        "(e.g. http://localhost:8080). Omit for a local human.",
+    )
+    parser.add_argument(
+        "--black",
+        metavar="URL",
+        help="URL of a network player to use for black. Omit for a local human.",
+    )
+    args = parser.parse_args(argv)
+
+    players: dict[chess.Color, Player] = {}
+    if args.white:
+        players[chess.WHITE] = NetworkPlayer(color=chess.WHITE, url=args.white)
+    else:
+        players[chess.WHITE] = LocalPlayer(color=chess.WHITE)
+    if args.black:
+        players[chess.BLACK] = NetworkPlayer(color=chess.BLACK, url=args.black)
+    else:
+        players[chess.BLACK] = LocalPlayer(color=chess.BLACK)
+
+    ChessApp(players=players).run()
 
 
 if __name__ == "__main__":

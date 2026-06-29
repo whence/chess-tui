@@ -1,0 +1,84 @@
+openapi: 3.0.3
+info:
+  title: chess-tui network player API
+  version: "1.0.0"
+  description: |
+    Minimal stateless REST API used by `chess-tui` to fetch a move from a
+    network opponent. The client sends the current position as a FEN
+    string; the server returns the chosen move in Standard Algebraic
+    Notation (SAN). The server is expected to validate the move is legal
+    in the given position — `chess-tui` will surface any 4xx response as
+    an error.
+
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local test server (`uv run chess-tui-net`)
+
+paths:
+  /move:
+    post:
+      summary: Request the next move for the given position
+      description: |
+        The client POSTs the current FEN. The server is expected to decide
+        a move (in this minimal setup, by prompting a human on its own
+        stdin) and return it as SAN. SAN is preferred over UCI because it
+        survives piece promotions cleanly and is what the TUI displays.
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MoveRequest"
+            examples:
+              starting:
+                summary: Standard chess starting position
+                value:
+                  fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+      responses:
+        "200":
+          description: Move chosen by the network player
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MoveResponse"
+        "400":
+          description: Bad request (malformed JSON, bad FEN, unparseable / illegal move)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Unknown path
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    MoveRequest:
+      type: object
+      required: [fen]
+      properties:
+        fen:
+          type: string
+          description: FEN string of the current position.
+          example: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+    MoveResponse:
+      type: object
+      required: [san]
+      properties:
+        san:
+          type: string
+          description: Move in Standard Algebraic Notation (e.g. "e4", "Nf3", "O-O", "e8=Q").
+          example: "e4"
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+          example: "illegal move in this position: 'e5'"

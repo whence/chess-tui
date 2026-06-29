@@ -10,6 +10,7 @@ dependencies = [
 
 [project.scripts]
 chess-tui = "chess_tui.app:main"
+chess-tui-net = "chess_tui.net_server:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -17,6 +18,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/chess_tui"]
+include = [
+    "src/chess_tui/*.py",
+    "openapi/*.yaml",
+]
 
 [dependency-groups]
 dev = [
