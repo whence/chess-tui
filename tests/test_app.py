@@ -48,6 +48,11 @@ def move_labels(app: ChessApp) -> list[str]:
     return [str(item.children[0].render()) for item in move_list.children]
 
 
+def focus_input(app: ChessApp) -> None:
+    """Move focus to the move-input so typed keys go there."""
+    app.query_one("#move-input", Input).focus()
+
+
 # ---- startup ----------------------------------------------------------------
 
 
@@ -93,12 +98,37 @@ async def test_title_background_reflects_turn() -> None:
         assert color.r > 200 and color.g > 200 and color.b > 200
 
 
+# ---- focus & move-list-as-default ------------------------------------------
+
+
+async def test_default_focus_is_move_list_not_input() -> None:
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        move_list = app.query_one("#move-list", ListView)
+        move_input = app.query_one("#move-input", Input)
+        assert move_list.has_focus
+        assert not move_input.has_focus
+
+
+async def test_enter_on_move_list_applies_highlighted_move() -> None:
+    """The default action for Enter should be 'pick the highlighted move'
+    via the move list, not the move input. The first item in the list is
+    the first legal move python-chess yields (Nh3 at the start)."""
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        # Move list has focus by default; Enter picks the highlighted item.
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app._state.san_history() == ["Nh3"]
+
+
 # ---- move input -------------------------------------------------------------
 
 
 async def test_typing_san_move_advances_position() -> None:
     async with run_app() as (app, pilot):
         await pilot.pause()
+        focus_input(app)
         await pilot.press("e", "2", "e", "4", "enter")
         await pilot.pause()
         assert piece_at_display(app, 4, 4) == "♙"
@@ -109,6 +139,7 @@ async def test_typing_san_move_advances_position() -> None:
 async def test_typing_uci_move_works() -> None:
     async with run_app() as (app, pilot):
         await pilot.pause()
+        focus_input(app)
         await pilot.press("e", "2", "e", "4", "enter")
         await pilot.pause()
         await pilot.press("e", "7", "e", "5", "enter")
@@ -121,6 +152,7 @@ async def test_typing_two_char_pawn_move_works() -> None:
     by the from-square query because both look like 'e4'."""
     async with run_app() as (app, pilot):
         await pilot.pause()
+        focus_input(app)
         await pilot.press("e", "4", "enter")
         await pilot.pause()
         assert app._state.san_history() == ["e4"], (
@@ -131,6 +163,7 @@ async def test_typing_two_char_pawn_move_works() -> None:
 async def test_illegal_move_shows_error_and_does_not_advance() -> None:
     async with run_app() as (app, pilot):
         await pilot.pause()
+        focus_input(app)
         await pilot.press("e", "2", "e", "5", "enter")  # illegal pawn jump
         await pilot.pause()
         assert piece_at_display(app, 6, 4) == "♙"
@@ -143,6 +176,7 @@ async def test_illegal_move_shows_error_and_does_not_advance() -> None:
 async def test_input_clears_after_submission() -> None:
     async with run_app() as (app, pilot):
         await pilot.pause()
+        focus_input(app)
         inp = app.query_one("#move-input", Input)
         await pilot.press("e", "4", "enter")
         await pilot.pause()
@@ -203,6 +237,7 @@ async def test_move_list_is_populated_with_legal_moves() -> None:
 async def test_typing_from_square_shows_destinations() -> None:
     async with run_app() as (app, pilot):
         await pilot.pause()
+        focus_input(app)
         await pilot.press("e", "2", "enter")
         await pilot.pause()
         labels = move_labels(app)

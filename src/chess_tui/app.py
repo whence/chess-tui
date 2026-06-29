@@ -257,14 +257,18 @@ class ChessApp(App):
                 yield Input(placeholder="Enter move (SAN or UCI), or from-square…", id="move-input")
                 yield Legend()
                 yield TextLine(
-                    "Enter: apply move • Tab/↑↓ then Enter: pick from list • "
+                    "↑↓ + Enter: pick a move • Tab to input to type a move • "
                     "f: flip • r: reset • q: quit",
                     id="help",
                 )
 
     def on_mount(self) -> None:
         self.state = self._state  # triggers watch_state -> refresh_all
-        self.query_one("#move-input", Input).focus()
+        # Default focus is the move list so Enter picks the highlighted move
+        # (Tab to the input below if you want to type a custom one).
+        move_list = self.query_one("#move-list", ListView)
+        move_list.index = 0
+        move_list.focus()
 
     # ---- rendering -------------------------------------------------------
 
