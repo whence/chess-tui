@@ -71,6 +71,28 @@ async def test_app_initial_title_is_white_to_move() -> None:
         assert "White to move" in title_text(app)
 
 
+async def test_title_background_reflects_turn() -> None:
+    """White's turn → white bg / dark text; black's turn → dark grey bg / white text."""
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        title = app.query_one("#title", TextLine)
+        # White to move at start: white background, dark text.
+        bg = title.styles.background
+        assert (bg.r, bg.g, bg.b) == (255, 255, 255)
+        color = title.styles.color
+        assert (color.r, color.g, color.b) == (0, 0, 0)
+        # Black to move after 1.e4: dark grey background, light text.
+        app._state.apply_san("e4")
+        app.refresh_all()
+        await pilot.pause()
+        bg = title.styles.background
+        # Dark grey (we use #3a3a3a) — every channel < 80.
+        assert bg.r < 80 and bg.g < 80 and bg.b < 80
+        color = title.styles.color
+        # Light text on dark background — every channel > 200.
+        assert color.r > 200 and color.g > 200 and color.b > 200
+
+
 # ---- move input -------------------------------------------------------------
 
 

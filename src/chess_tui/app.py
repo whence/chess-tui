@@ -187,7 +187,6 @@ class ChessApp(App):
     #title {
         dock: top;
         height: 1;
-        background: $accent;
         color: $text;
         content-align: center middle;
         text-style: bold;
@@ -285,9 +284,20 @@ class ChessApp(App):
         title = self.query_one("#title", TextLine)
         if self._state.is_game_over():
             title.set_text(f"Chess TUI — Game over: {self._state.result()}")
+            # Use a neutral background when the game is over.
+            title.styles.background = "#5a5a5a"
+            title.styles.color = "white"
         else:
             suffix = " (check)" if self._state.is_check() else ""
             title.set_text(f"Chess TUI — {self._state.turn_name()} to move{suffix}")
+            if self._state.turn() == chess.WHITE:
+                # White's turn: white background, dark text for contrast.
+                title.styles.background = "white"
+                title.styles.color = "black"
+            else:
+                # Black's turn: dark grey background, white text.
+                title.styles.background = "#3a3a3a"
+                title.styles.color = "white"
 
     def _refresh_status(self) -> None:
         status = self.query_one("#status", TextLine)
