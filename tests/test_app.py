@@ -93,6 +93,18 @@ async def test_typing_uci_move_works() -> None:
         assert piece_at_display(app, 3, 4) == "♟"
 
 
+async def test_typing_two_char_pawn_move_works() -> None:
+    """Regression: 2-char SAN pawn moves like 'e4' were getting intercepted
+    by the from-square query because both look like 'e4'."""
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        await pilot.press("e", "4", "enter")
+        await pilot.pause()
+        assert app._state.san_history() == ["e4"], (
+            f"expected ['e4'], got {app._state.san_history()}"
+        )
+
+
 async def test_illegal_move_shows_error_and_does_not_advance() -> None:
     async with run_app() as (app, pilot):
         await pilot.pause()

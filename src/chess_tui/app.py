@@ -269,17 +269,20 @@ class ChessApp(App):
         text = text.strip()
         if not text:
             return
-        # From-square query: show destinations in the move list.
-        square = self._state.parse_display_square(text)
-        if square is not None and not self._state.board.piece_at(square):
-            self._show_destinations(square)
-            return
-        if square is not None:
-            dests = self._state.legal_moves_from(square)
-            if dests:
+        # Try to apply as a move first (SAN like "e4"/"Nf3" or UCI like
+        # "e2e4"). Only fall back to the from-square query if the text isn't
+        # a parseable move — otherwise typing a 2-char pawn move like "e4"
+        # would get intercepted as a "where can this square go?" query.
+        try:
+            self._state.apply_san(text)
+        except (IllegalMoveError, ValueError, chess.AmbiguousMoveError):
+            square = self._state.parse_display_square(text)
+            if square is not None:
                 self._show_destinations(square)
                 return
-        self._try_apply(text)
+            self._set_status_error(f"unrecognized input: {text!r}")
+            return
+        self.refresh_all()
 
     def _try_apply(self, text: str, *, is_uci: bool = False) -> None:
         try:
