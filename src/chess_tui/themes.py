@@ -26,9 +26,9 @@ class Theme:
 
 
 THEME = Theme(
-    name="checkered",
-    light_square="#769656",
-    dark_square="#BACA44",
+    name="classic",
+    light_square="#dfc492",
+    dark_square="#b58863",
     light_piece="white",
     dark_piece="black",
 )
