@@ -694,6 +694,8 @@ class ChessApp(App):
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
+    from . import sound
+
     parser = argparse.ArgumentParser(
         prog="chess-tui",
         description="TUI chess app. Pass --white / --black to route that "
@@ -710,7 +712,15 @@ def main(argv: list[str] | None = None) -> None:
         metavar="URL",
         help="URL of a network player to use for black. Omit for a local human.",
     )
+    parser.add_argument(
+        "-s", "--silent",
+        action="store_true",
+        help="disable click sound",
+    )
     args = parser.parse_args(argv)
+
+    if args.silent:
+        sound.SILENT = True
 
     players: dict[chess.Color, Player] = {}
     if args.white:

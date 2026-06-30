@@ -10,10 +10,13 @@ import threading
 # Path to the click sound
 _CLICK_WAV = os.path.join(os.path.dirname(__file__), "click.wav")
 
+# Global silence flag
+SILENT: bool = False
+
 
 def play_click() -> None:
     """Play the click sound in a background thread (non-blocking)."""
-    if not os.path.exists(_CLICK_WAV):
+    if SILENT or not os.path.exists(_CLICK_WAV):
         return
 
     def _play() -> None:
