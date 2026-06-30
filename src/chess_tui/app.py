@@ -12,6 +12,7 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 
 from . import net
 from .pieces import glyph
+from .sound import play_click
 from .player import LocalPlayer, NetworkPlayer, Player
 from .state import BoardState, IllegalMoveError
 from .themes import THEME, Theme
@@ -597,8 +598,8 @@ class ChessApp(App):
         try:
             self._state.apply_move(move)
             self._selected = None
-            self._last_move = ((from_row, from_col), (to_row, to_col))
-            self._commit()
+            self._last_move_squares = (move.from_square, move.to_square)
+            self._commit(sound=True)
         except IllegalMoveError as exc:
             self._set_status_error(str(exc))
 
@@ -617,7 +618,9 @@ class ChessApp(App):
 
     # ---- actions ---------------------------------------------------------
 
-    def _commit(self) -> None:
+    def _commit(self, *, sound: bool = False) -> None:
+        if sound:
+            play_click()
         self.refresh_all()
         self._maybe_request_network_move()
 
@@ -648,7 +651,7 @@ class ChessApp(App):
                 return
             self._set_status_error(f"unrecognized input: {text!r}")
             return
-        self._commit()
+        self._commit(sound=True)
 
     def _try_apply(self, text: str, *, is_uci: bool = False) -> None:
         try:
@@ -664,7 +667,7 @@ class ChessApp(App):
         except (IllegalMoveError, ValueError, chess.InvalidMoveError, chess.AmbiguousMoveError) as exc:
             self._set_status_error(str(exc))
             return
-        self._commit()
+        self._commit(sound=True)
 
     def _show_destinations(self, square: chess.Square) -> None:
         move_list = self.query_one("#move-list", ListView)

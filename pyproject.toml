@@ -21,6 +21,7 @@ build-backend = "hatchling.build"
 packages = ["src/chess_tui"]
 include = [
     "src/chess_tui/*.py",
+    "src/chess_tui/*.wav",
     "openapi/*.yaml",
 ]
 
