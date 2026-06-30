@@ -234,9 +234,24 @@ def main(argv: list[str] | None = None) -> None:
 
     # Resolve engine path
     if args.engine:
-        # Explicit path takes precedence
-        engine_path = resolve_engine_path(args.engine)
-        engine_name = os.path.basename(engine_path)
+        # Try as path first, then as engine name
+        if os.path.exists(args.engine):
+            engine_path = resolve_engine_path(args.engine)
+            engine_name = os.path.basename(engine_path)
+        elif args.engine in engines_config.get("engines", {}):
+            # Look up as engine name
+            engine_entry = engines_config["engines"][args.engine]
+            if isinstance(engine_entry, str):
+                engine_path = resolve_engine_path(engine_entry)
+            elif isinstance(engine_entry, dict):
+                engine_path = resolve_engine_path(engine_entry.get("path", ""))
+            else:
+                print(f"Error: invalid engine config for '{args.engine}'", file=sys.stderr)
+                sys.exit(1)
+            engine_name = args.engine
+        else:
+            print(f"Error: engine not found at '{args.engine}' (not a path or name in engines.json)", file=sys.stderr)
+            sys.exit(1)
     else:
         # Look up from engines.json
         engine_entry = engines_config.get("engines", {}).get(args.engine_name)
