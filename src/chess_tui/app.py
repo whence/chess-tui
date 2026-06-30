@@ -348,6 +348,8 @@ class ChessApp(App):
 
     def on_mount(self) -> None:
         self.refresh_all()
+        # Trigger network move on mount if it's network player's turn
+        self.call_later(self._maybe_request_network_move)
 
     # ---- rendering -------------------------------------------------------
 
