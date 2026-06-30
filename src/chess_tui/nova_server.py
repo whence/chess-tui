@@ -213,6 +213,7 @@ def _make_handler(
     rng: random.Random,
     min_wait: float,
     max_wait: float,
+    top_n: int,
     verbose: bool,
 ) -> type[BaseHTTPRequestHandler]:
     """Create a request handler with Nova configuration."""
@@ -277,18 +278,33 @@ def _make_handler(
             # Get move from Nova
             legal_moves = list(board.legal_moves)
             top_moves = nova_model.predict_topk(
-                fen, k=5, rating=chosen_elo, legal_moves=legal_moves, board=board
+                fen, k=max(top_n, 5), rating=chosen_elo, legal_moves=legal_moves, board=board
             )
 
             if not top_moves:
                 self._send_json(500, {"error": "nova failed to produce moves"})
                 return
 
-            # Pick the top move (highest probability)
-            move_san = top_moves[0]["move"]
+            # Select move based on top_n
+            if top_n <= 1 or len(top_moves) == 1:
+                # Always pick the top move
+                move_san = top_moves[0]["move"]
+            else:
+                # Weighted random selection from top_n moves
+                candidates = top_moves[:top_n]
+                total = sum(m["p"] for m in candidates)
+                roll = rng.random() * total
+                cumulative = 0.0
+                move_san = candidates[0]["move"]  # fallback
+                for m in candidates:
+                    cumulative += m["p"]
+                    if roll <= cumulative:
+                        move_san = m["move"]
+                        break
+
             if verbose:
                 print(f"  [nova] chose: {move_san} (elo={chosen_elo}, source={source})", flush=True)
-                print(f"  [nova] top moves: {top_moves[:3]}", flush=True)
+                print(f"  [nova] top moves: {top_moves[:top_n]}", flush=True)
 
             self._send_json(200, {"san": move_san})
 
@@ -366,6 +382,12 @@ def main(argv: list[str] | None = None) -> None:
         help="maximum thinking time in seconds (default: 3.0)",
     )
     parser.add_argument(
+        "--top-n",
+        type=int,
+        default=1,
+        help="pick from top N moves (normalized probabilities, default: 1)",
+    )
+    parser.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="print position and thinking info to stdout",
@@ -417,6 +439,7 @@ def main(argv: list[str] | None = None) -> None:
         rng=rng,
         min_wait=args.min_wait,
         max_wait=args.max_wait,
+        top_n=args.top_n,
         verbose=args.verbose,
     )
 
