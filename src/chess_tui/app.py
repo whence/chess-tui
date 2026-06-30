@@ -97,38 +97,6 @@ class TextLine(Static):
         self.update(text)
 
 
-class Legend(Static):
-    """Shows which piece glyphs are white vs black."""
-
-    WHITE_PIECES = "♙ ♘ ♗ ♖ ♕ ♔"
-    BLACK_PIECES = "♟ ♞ ♝ ♜ ♛ ♚"
-
-    DEFAULT_CSS: ClassVar[str] = """
-    Legend {
-        height: 2;
-        padding: 0 1;
-        color: $text-muted;
-    }
-    """
-
-    def __init__(self) -> None:
-        from rich.table import Table
-        from rich.text import Text
-
-        table = Table(
-            show_header=False,
-            show_edge=False,
-            box=None,
-            padding=(0, 1),
-            expand=False,
-        )
-        table.add_column(justify="right", no_wrap=True, width=8)
-        table.add_column(justify="left", no_wrap=True)
-        table.add_row(Text("White", style="bold"), Text(self.WHITE_PIECES))
-        table.add_row(Text("Black", style="bold"), Text(self.BLACK_PIECES))
-        super().__init__(table)
-
-
 class BoardWidget(Static):
     """Renders the 8x8 board as a grid of Cells, themed by a :class:`Theme`."""
 
@@ -346,7 +314,6 @@ class ChessApp(App):
                     yield Static("Moves:", id="move-history-text")
                 yield ListView(id="move-list")
                 yield Input(placeholder="Enter move (SAN or UCI), or from-square…", id="move-input")
-                yield Legend()
                 yield TextLine(
                     "Arrow keys: navigate • Space: select/place • "
                     "Enter: confirm • Esc: cancel • f: flip • r: reset • q: quit",
