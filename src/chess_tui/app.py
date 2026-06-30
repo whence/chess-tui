@@ -7,7 +7,7 @@ from typing import ClassVar
 import chess
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Grid, Horizontal, Vertical
+from textual.containers import Grid, Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Input, Label, ListItem, ListView, Static
 
 from . import net
@@ -279,6 +279,11 @@ class ChessApp(App):
         height: auto;
         padding: 1 0;
     }
+    #move-history {
+        height: 8;
+        border: round $secondary;
+        padding: 0 1;
+    }
     #move-list {
         height: 1fr;
         border: round $primary;
@@ -337,6 +342,8 @@ class ChessApp(App):
                     yield FileBar(id="files-bot")
             with Vertical(id="side"):
                 yield TextLine("", id="status")
+                with ScrollableContainer(id="move-history"):
+                    yield Static("Moves:", id="move-history-text")
                 yield ListView(id="move-list")
                 yield Input(placeholder="Enter move (SAN or UCI), or from-square…", id="move-input")
                 yield Legend()
@@ -396,6 +403,7 @@ class ChessApp(App):
         self.query_one("#files-bot", FileBar).refresh_files(self._state)
         self._refresh_title()
         self._refresh_status()
+        self._refresh_move_history()
         self._refresh_move_list()
 
     def _refresh_title(self) -> None:
@@ -461,6 +469,23 @@ class ChessApp(App):
                 item = ListItem(Label(self._state.san_for(move)))
                 setattr(item, _MOVE_ATTR, move.uci())
                 move_list.append(item)
+
+    def _refresh_move_history(self) -> None:
+        """Refresh the move history panel."""
+        history_text = self.query_one("#move-history-text", Static)
+        history = self._state.san_history()
+        if not history:
+            history_text.update("Moves:")
+            return
+        # Format as pairs: "1. e4 e5 2. Nf3 Nf6 ..."
+        move_pairs: list[str] = []
+        for i in range(0, len(history), 2):
+            num = i // 2 + 1
+            if i + 1 < len(history):
+                move_pairs.append(f"{num}. {history[i]} {history[i+1]}")
+            else:
+                move_pairs.append(f"{num}. {history[i]}")
+        history_text.update("Moves: " + " ".join(move_pairs))
 
     # ---- cursor actions --------------------------------------------------
 
