@@ -342,11 +342,12 @@ class ChessApp(App):
             return
         if self._players[self._state.turn()] is not player:
             return
+        # Set up status callback for countdown
+        player.on_status = self._set_status_error
         try:
             move = await player.choose_move(self._state.board)
-        except (IllegalMoveError, net.NetworkError) as exc:
-            self._set_status_error(f"network player error: {exc}")
-            return
+        finally:
+            player.on_status = None
         try:
             self._state.apply_move(move)
         except IllegalMoveError as exc:

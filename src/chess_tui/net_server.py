@@ -7,20 +7,39 @@ network opponent when you're testing the TUI in a separate terminal.
 
 The API is described in ``openapi/chess-tui-net.yaml``; this server is the
 reference implementation.
+
+Concurrency model:
+    The main thread runs the HTTP server and accepts new requests. Each request
+    spawns a daemon thread to read user input via ``input()``. If a new request
+    arrives while waiting for input, the old request is abandoned (not responded
+    to) and a new input prompt is shown. The old thread will finish reading
+    input naturally and discard the result.
+
+    We use a generation counter to track which request is "current". When input
+    arrives, the thread checks if its generation matches the current one. If
+    not, the input is discarded.
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import chess
 
 
 def _make_handler() -> type[BaseHTTPRequestHandler]:
+    # --- shared state across all handler instances ---
+    _lock = threading.Lock()  # serializes input() calls
+    _generation = 0  # incremented on each new request
+    _prompt_count = 0  # how many prompts have been shown (for visual clarity)
+
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802 — http.server convention
+            nonlocal _generation, _prompt_count
+
             if self.path.rstrip("/") != "/move":
                 self._send_json(404, {"error": f"unknown path: {self.path!r}"})
                 return
@@ -43,16 +62,38 @@ def _make_handler() -> type[BaseHTTPRequestHandler]:
                 self._send_json(400, {"error": f"bad FEN: {exc}"})
                 return
 
-            # Print to the server's own stdout so a human in the terminal
-            # can see what's being asked and type the next move.
-            print("\n" + "─" * 32, flush=True)
-            print(f"Incoming position — FEN: {fen}", flush=True)
-            print(board, flush=True)
-            print(f"Side to move: {'White' if board.turn else 'Black'}", flush=True)
-            try:
-                user_input = input("Your move (SAN or UCI, e.g. e4 / Nf3 / e7e8q): ")
-            except EOFError:
-                self._send_json(400, {"error": "no input available"})
+            # --- cancel any previous pending input ---
+            with _lock:
+                _generation += 1
+                my_generation = _generation
+                _prompt_count += 1
+                prompt_num = _prompt_count
+
+            # --- wait for any ongoing input to finish, then do our own ---
+            # We acquire the lock to serialize input() calls. If we were
+            # superseded while waiting, we return 503 immediately.
+            with _lock:
+                # Check if we were superseded while waiting for the lock
+                if _generation != my_generation:
+                    self._send_json(503, {"error": "superseded by new request"})
+                    return
+
+                # Print the position and prompt
+                print("\n" + "─" * 32, flush=True)
+                print(f"[#{prompt_num}] Incoming position — FEN: {fen}", flush=True)
+                print(board, flush=True)
+                print(f"Side to move: {'White' if board.turn else 'Black'}", flush=True)
+                try:
+                    user_input = input("Your move (SAN or UCI, e.g. e4 / Nf3 / e7e8q): ")
+                except EOFError:
+                    self._send_json(400, {"error": "no input available"})
+                    return
+
+            # Check if we were superseded while waiting for input
+            if _generation != my_generation:
+                # Discard input from stale request — don't send any response
+                # (the client already timed out and moved on)
+                print(f"  ↳ (discarded — superseded by newer request)", flush=True)
                 return
 
             user_input = user_input.strip()
@@ -116,6 +157,8 @@ def main(argv: list[str] | None = None) -> None:
     print(
         f"chess-tui network server listening on http://127.0.0.1:{args.port}\n"
         "  POST /move with {\"fen\": \"...\"} → {\"san\": \"...\"}\n"
+        "  If client retries while you're thinking, the old prompt is\n"
+        "  abandoned and a fresh prompt appears.\n"
         "  Ctrl-C to stop.",
         flush=True,
     )

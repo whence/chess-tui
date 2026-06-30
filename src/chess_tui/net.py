@@ -7,12 +7,13 @@ have to add ``httpx``/``requests`` as a dep.
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
 from typing import Any
 
-DEFAULT_TIMEOUT = 30.0
+DEFAULT_TIMEOUT = 10.0
 
 
 class NetworkError(RuntimeError):
@@ -37,6 +38,10 @@ class ServerError(NetworkError):
 
 class TransportError(NetworkError):
     """Connection refused, DNS failure, timeout, etc."""
+
+
+class ServerBusyError(NetworkError):
+    """The server is busy processing another request (HTTP 503)."""
 
 
 def _post_json(url: str, payload: dict, *, timeout: float) -> dict:
@@ -65,6 +70,11 @@ def _post_json(url: str, payload: dict, *, timeout: float) -> dict:
         raise ServerError(exc.code, body) from None
     except urllib.error.URLError as exc:
         raise TransportError(f"could not reach {url}: {exc.reason}") from exc
+    except (http.client.RemoteDisconnected, ConnectionError, OSError) as exc:
+        # RemoteDisconnected: server closed connection mid-request
+        # ConnectionError: connection refused, reset, etc.
+        # OSError: broken pipe, connection reset, etc.
+        raise TransportError(f"could not reach {url}: {exc}") from exc
     except TimeoutError as exc:
         raise TransportError(f"timed out reaching {url} after {timeout}s") from exc
 
@@ -77,11 +87,17 @@ def _post_json(url: str, payload: dict, *, timeout: float) -> dict:
 def request_move(url: str, fen: str, *, timeout: float = DEFAULT_TIMEOUT) -> str:
     """POST ``{"fen": fen}`` to ``{url}/move`` and return the SAN string.
 
-    Raises :class:`ServerError` (status >= 400) or :class:`TransportError`
-    (connection / timeout). The returned SAN is not validated against
-    legality here — callers do that against their own board.
+    Raises :class:`ServerError` (status >= 400), :class:`TransportError`
+    (connection / timeout), or :class:`ServerBusyError` (503).
+    The returned SAN is not validated against legality here — callers
+    do that against their own board.
     """
-    payload = _post_json(f"{url.rstrip('/')}/move", {"fen": fen}, timeout=timeout)
+    try:
+        payload = _post_json(f"{url.rstrip('/')}/move", {"fen": fen}, timeout=timeout)
+    except ServerError as exc:
+        if exc.status == 503:
+            raise ServerBusyError(f"server busy: {exc.body}") from exc
+        raise
     san = payload.get("san")
     if not isinstance(san, str):
         raise ServerError(200, payload)
