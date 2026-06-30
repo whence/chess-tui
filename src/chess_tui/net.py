@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-DEFAULT_TIMEOUT = 300.0
+DEFAULT_TIMEOUT = 10.0
 
 
 class NetworkError(RuntimeError):
