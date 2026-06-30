@@ -64,7 +64,7 @@ class NetworkPlayer:
 
     color: chess.Color
     url: str
-    timeout: float = 10.0
+    timeout: float = 300.0
     on_status: Callable[[str], None] | None = None
 
     def _report(self, msg: str) -> None:
