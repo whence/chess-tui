@@ -23,11 +23,15 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 
 
-# Default Nova model path
-DEFAULT_NOVA_MODEL = os.path.expanduser(
-    "~/.cache/huggingface/hub/models--novachess--novachess-engine/"
-    "snapshots/018627575b71c9c17e9e5cc207c1b87db057dfbc/nova_v3b.onnx"
-)
+def _load_engines_config() -> dict:
+    """Load engines.json from project root."""
+    config_path = os.path.join(PROJECT_DIR, "engines.json")
+    try:
+        with open(config_path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Error: engines.json not found or invalid: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _load_nova_predictor(model_path: str, classical: float = 0.5, aggression: float = 0.5):
@@ -349,25 +353,23 @@ def main(argv: list[str] | None = None) -> None:
         help="maximum thinking time in seconds (default: 3.0)",
     )
     parser.add_argument(
-        "--nova-model",
-        default=DEFAULT_NOVA_MODEL,
-        help=f"path to Nova ONNX model (default: {DEFAULT_NOVA_MODEL})",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="random seed (default: random)",
-    )
-    parser.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="print position and thinking info to stdout",
     )
     args = parser.parse_args(argv)
 
-    # Validate model exists
-    model_path = os.path.expanduser(args.nova_model)
+    # Load Nova config from engines.json
+    config = _load_engines_config()
+    nova_config = config.get("nova")
+    if not nova_config:
+        print("Error: 'nova' not found in engines.json", file=sys.stderr)
+        sys.exit(1)
+
+    model_path = os.path.expanduser(nova_config.get("path", ""))
+    classical = nova_config.get("classical", 0.5)
+    aggression = nova_config.get("aggression", 0.5)
+
     if not os.path.exists(model_path):
         print(f"Error: Nova model not found at {model_path}", file=sys.stderr)
         print(
@@ -379,7 +381,7 @@ def main(argv: list[str] | None = None) -> None:
     # Load Nova
     if verbose:
         print(f"Loading Nova model from {model_path}...", flush=True)
-    nova_model = _load_nova_predictor(model_path)
+    nova_model = _load_nova_predictor(model_path, classical, aggression)
     if verbose:
         print("Nova model loaded.", flush=True)
 
@@ -392,11 +394,8 @@ def main(argv: list[str] | None = None) -> None:
         elo_high_credit=args.elo_high_credit,
     )
 
-    # Create RNG
-    seed = args.seed if args.seed is not None else int(time.time() * 1000) % (2**31)
-    rng = random.Random(seed)
-    if verbose:
-        print(f"Random seed: {seed}", flush=True)
+    # Create RNG with random seed
+    rng = random.Random()
 
     handler = _make_handler(
         nova_model=nova_model,

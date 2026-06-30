@@ -3,5 +3,10 @@
     "plentychess": "~/projects/chess-engines/plentychess/plentychess-macos-m1-apple-silicon",
     "stockfish": "~/projects/chess-engines/stockfish/stockfish-macos-m1-apple-silicon",
     "dragon": "~/projects/chess-engines/dragon/dragon-macos-m1-apple-silicon"
+  },
+  "nova": {
+    "path": "~/.cache/huggingface/hub/models--novachess--novachess-engine/snapshots/018627575b71c9c17e9e5cc207c1b87db057dfbc/nova_v3b.onnx",
+    "classical": 0.5,
+    "aggression": 0.5
   }
 }
