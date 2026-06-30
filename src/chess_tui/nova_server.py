@@ -329,8 +329,7 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
-        "port",
-        nargs="?",
+        "--port",
         type=int,
         default=8080,
         help="port to listen on (default: 8080)",
@@ -405,11 +404,9 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     # Load Nova
-    if verbose:
-        print(f"Loading Nova model from {model_path}...", flush=True)
+    print(f"Loading Nova model from {model_path}...", flush=True)
     nova_model = _load_nova_predictor(model_path, classical, aggression)
-    if verbose:
-        print("Nova model loaded.", flush=True)
+    print("Nova model loaded.", flush=True)
 
     # Create player with credits
     player = NovaPlayer(
