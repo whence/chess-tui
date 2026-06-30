@@ -475,7 +475,7 @@ class ChessApp(App):
         history_text = self.query_one("#move-history-text", Static)
         history = self._state.san_history()
         if not history:
-            history_text.update("Moves:")
+            history_text.update("")
             return
         # Format as pairs: "1. e4 e5 2. Nf3 Nf6 ..."
         move_pairs: list[str] = []
@@ -485,7 +485,7 @@ class ChessApp(App):
                 move_pairs.append(f"{num}. {history[i]} {history[i+1]}")
             else:
                 move_pairs.append(f"{num}. {history[i]}")
-        history_text.update("Moves: " + " ".join(move_pairs))
+        history_text.update(" ".join(move_pairs))
 
     # ---- cursor actions --------------------------------------------------
 
