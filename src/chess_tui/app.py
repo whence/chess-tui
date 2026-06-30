@@ -464,8 +464,15 @@ class ChessApp(App):
         except Exception:
             return False
 
+    def _is_local_turn(self) -> bool:
+        """Check if it's a local player's turn to move."""
+        if self._state.is_game_over():
+            return False
+        player = self._players[self._state.turn()]
+        return isinstance(player, LocalPlayer)
+
     def action_cursor_up(self) -> None:
-        if self._input_has_focus():
+        if self._input_has_focus() or not self._is_local_turn():
             return
         row, col = self._cursor
         if row > 0:
@@ -473,7 +480,7 @@ class ChessApp(App):
             self.refresh_all()
 
     def action_cursor_down(self) -> None:
-        if self._input_has_focus():
+        if self._input_has_focus() or not self._is_local_turn():
             return
         row, col = self._cursor
         if row < 7:
@@ -481,7 +488,7 @@ class ChessApp(App):
             self.refresh_all()
 
     def action_cursor_left(self) -> None:
-        if self._input_has_focus():
+        if self._input_has_focus() or not self._is_local_turn():
             return
         row, col = self._cursor
         if col > 0:
@@ -489,7 +496,7 @@ class ChessApp(App):
             self.refresh_all()
 
     def action_cursor_right(self) -> None:
-        if self._input_has_focus():
+        if self._input_has_focus() or not self._is_local_turn():
             return
         row, col = self._cursor
         if col < 7:
@@ -498,7 +505,7 @@ class ChessApp(App):
 
     def action_select_piece(self) -> None:
         """Space: select piece or place piece."""
-        if self._input_has_focus():
+        if self._input_has_focus() or not self._is_local_turn():
             return  # Let input handle space
         row, col = self._cursor
         square = self._state.square_at(row, col)
@@ -552,7 +559,7 @@ class ChessApp(App):
 
     def action_confirm_selection(self) -> None:
         """Enter: confirm move if cursor is on a legal destination."""
-        if self._selected is None:
+        if self._selected is None or not self._is_local_turn():
             return
 
         row, col = self._cursor
@@ -566,7 +573,7 @@ class ChessApp(App):
 
     def action_cancel_selection(self) -> None:
         """Escape: cancel current selection."""
-        if self._input_has_focus():
+        if self._input_has_focus() or not self._is_local_turn():
             return  # Let input handle escape
         if self._selected is not None:
             self._selected = None
