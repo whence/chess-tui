@@ -167,7 +167,7 @@ class NovaPlayer:
         self._elo_low_remaining = self.elo_low_credit
         self._elo_high_remaining = self.elo_high_credit
 
-    def choose_elo(self, rng: random.Random, verbose: bool = False) -> tuple[int, str]:
+    def choose_elo(self, rng: random.Random) -> tuple[int, str]:
         """Choose which ELO level to use based on credits.
 
         Returns (elo, source) where source is 'low', 'high', or 'base'.
@@ -182,28 +182,25 @@ class NovaPlayer:
 
         if roll < low_prob and self._elo_low_remaining > 0:
             self._elo_low_remaining -= 1
-            if verbose:
-                print(
-                    f"  [nova] roll={roll:.3f} < {low_prob:.3f} → elo_low={self.elo_low} "
-                    f"(remaining: {self._elo_low_remaining}/{self.elo_low_credit})",
-                    flush=True,
-                )
+            print(
+                f"  [nova] roll={roll:.3f} < {low_prob:.3f} → elo_low={self.elo_low} "
+                f"(remaining: {self._elo_low_remaining}/{self.elo_low_credit})",
+                flush=True,
+            )
             return self.elo_low, "low"
         elif roll < low_prob + high_prob and self._elo_high_remaining > 0:
             self._elo_high_remaining -= 1
-            if verbose:
-                print(
-                    f"  [nova] roll={roll:.3f} < {low_prob + high_prob:.3f} → elo_high={self.elo_high} "
-                    f"(remaining: {self._elo_high_remaining}/{self.elo_high_credit})",
-                    flush=True,
-                )
+            print(
+                f"  [nova] roll={roll:.3f} < {low_prob + high_prob:.3f} → elo_high={self.elo_high} "
+                f"(remaining: {self._elo_high_remaining}/{self.elo_high_credit})",
+                flush=True,
+            )
             return self.elo_high, "high"
         else:
-            if verbose:
-                print(
-                    f"  [nova] roll={roll:.3f} → elo_base={self.elo}",
-                    flush=True,
-                )
+            print(
+                f"  [nova] roll={roll:.3f} → elo_base={self.elo}",
+                flush=True,
+            )
             return self.elo, "base"
 
 
@@ -214,7 +211,6 @@ def _make_handler(
     min_wait: float,
     max_wait: float,
     top_n: int,
-    verbose: bool,
 ) -> type[BaseHTTPRequestHandler]:
     """Create a request handler with Nova configuration."""
 
@@ -249,31 +245,29 @@ def _make_handler(
                 self._send_json(400, {"error": f"game over: {result}"})
                 return
 
-            if verbose:
-                side = "White" if board.turn else "Black"
-                move_num = board.fullmove_number
-                print(f"\n{'─' * 40}", flush=True)
-                print(f"Move {move_num} — {side} to move", flush=True)
-                if moves:
-                    # Format as pairs: "1. e4 e5 2. Nf3 Nf6 ..."
-                    move_pairs: list[str] = []
-                    for i in range(0, len(moves), 2):
-                        num = i // 2 + 1
-                        if i + 1 < len(moves):
-                            move_pairs.append(f"{num}. {moves[i]} {moves[i+1]}")
-                        else:
-                            move_pairs.append(f"{num}. {moves[i]}")
-                    print("Moves: " + " ".join(move_pairs), flush=True)
-                print(board, flush=True)
+            side = "White" if board.turn else "Black"
+            move_num = board.fullmove_number
+            print(f"\n{'─' * 40}", flush=True)
+            print(f"Move {move_num} — {side} to move", flush=True)
+            if moves:
+                # Format as pairs: "1. e4 e5 2. Nf3 Nf6 ..."
+                move_pairs: list[str] = []
+                for i in range(0, len(moves), 2):
+                    num = i // 2 + 1
+                    if i + 1 < len(moves):
+                        move_pairs.append(f"{num}. {moves[i]} {moves[i+1]}")
+                    else:
+                        move_pairs.append(f"{num}. {moves[i]}")
+                print("Moves: " + " ".join(move_pairs), flush=True)
+            print(board, flush=True)
 
             # Simulate thinking time
             wait_time = rng.uniform(min_wait, max_wait)
-            if verbose:
-                print(f"  [nova] thinking for {wait_time:.1f}s...", flush=True)
+            print(f"  [nova] thinking for {wait_time:.1f}s...", flush=True)
             time.sleep(wait_time)
 
             # Choose ELO level
-            chosen_elo, source = player.choose_elo(rng, verbose=verbose)
+            chosen_elo, source = player.choose_elo(rng)
 
             # Get move from Nova
             legal_moves = list(board.legal_moves)
@@ -289,10 +283,15 @@ def _make_handler(
             if top_n <= 1 or len(top_moves) == 1:
                 # Always pick the top move
                 move_san = top_moves[0]["move"]
+                print(f"  [nova] top move: {move_san} (elo={chosen_elo}, source={source})", flush=True)
             else:
                 # Weighted random selection from top_n moves
                 candidates = top_moves[:top_n]
                 total = sum(m["p"] for m in candidates)
+                print(f"  [nova] top {len(candidates)} moves (elo={chosen_elo}, source={source}):", flush=True)
+                for m in candidates:
+                    normalized = m["p"] / total * 100
+                    print(f"    {m['move']}: {m['p']:.1f} → {normalized:.1f}%", flush=True)
                 roll = rng.random() * total
                 cumulative = 0.0
                 move_san = candidates[0]["move"]  # fallback
@@ -301,10 +300,7 @@ def _make_handler(
                     if roll <= cumulative:
                         move_san = m["move"]
                         break
-
-            if verbose:
-                print(f"  [nova] chose: {move_san} (elo={chosen_elo}, source={source})", flush=True)
-                print(f"  [nova] top moves: {top_moves[:top_n]}", flush=True)
+                print(f"  [nova] chose: {move_san}", flush=True)
 
             self._send_json(200, {"san": move_san})
 
@@ -387,13 +383,7 @@ def main(argv: list[str] | None = None) -> None:
         default=1,
         help="pick from top N moves (normalized probabilities, default: 1)",
     )
-    parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="print position and thinking info to stdout",
-    )
     args = parser.parse_args(argv)
-    verbose = args.verbose
 
     # Load Nova config from engines.json
     config = _load_engines_config()
@@ -440,7 +430,6 @@ def main(argv: list[str] | None = None) -> None:
         min_wait=args.min_wait,
         max_wait=args.max_wait,
         top_n=args.top_n,
-        verbose=args.verbose,
     )
 
     # Print config
