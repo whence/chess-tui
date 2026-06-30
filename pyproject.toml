@@ -11,6 +11,7 @@ dependencies = [
 [project.scripts]
 chess-tui = "chess_tui.app:main"
 chess-tui-net = "chess_tui.net_server:main"
+chess-tui-engine = "chess_tui.engine_server:main"
 
 [build-system]
 requires = ["hatchling"]
