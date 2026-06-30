@@ -165,12 +165,20 @@ class BoardWidget(Static):
         state: BoardState,
         cursor: tuple[int, int] | None = None,
         selected: tuple[int, int] | None = None,
-        last_move: tuple[tuple[int, int], tuple[int, int]] | None = None,
+        last_move_squares: tuple[int, int] | None = None,
     ) -> None:
         light_bg = self.theme.light_square
         dark_bg = self.theme.dark_square
         light_fg = self.theme.light_piece
         dark_fg = self.theme.dark_piece
+        # Convert last move squares to display coordinates
+        last_move_display: tuple[tuple[int, int], tuple[int, int]] | None = None
+        if last_move_squares is not None:
+            from_sq, to_sq = last_move_squares
+            last_move_display = (
+                state.display_position(from_sq),
+                state.display_position(to_sq),
+            )
         for row in range(8):
             for col in range(8):
                 square = state.square_at(row, col)
@@ -179,8 +187,8 @@ class BoardWidget(Static):
                 cell = self.query_one(f"#cell-{row}-{col}", Cell)
                 is_cursor = cursor == (row, col)
                 is_selected = selected == (row, col)
-                is_last_move = last_move is not None and (
-                    (row, col) == last_move[0] or (row, col) == last_move[1]
+                is_last_move = last_move_display is not None and (
+                    (row, col) == last_move_display[0] or (row, col) == last_move_display[1]
                 )
                 cell.set_piece(
                     piece,
@@ -312,8 +320,8 @@ class ChessApp(App):
         self._cursor: tuple[int, int] = (7, 4)  # Start at e1
         # Selected piece square (display row, col) or None
         self._selected: tuple[int, int] | None = None
-        # Last move highlight: ((from_row, from_col), (to_row, to_col))
-        self._last_move: tuple[tuple[int, int], tuple[int, int]] | None = None
+        # Last move highlight as square indices (flip-independent)
+        self._last_move_squares: tuple[int, int] | None = None  # (from_sq, to_sq)
 
     # ---- composition -----------------------------------------------------
 
@@ -366,11 +374,8 @@ class ChessApp(App):
         finally:
             player.on_status = None
         try:
-            # Get display positions before applying move
-            from_row, from_col = self._state.display_position(move.from_square)
-            to_row, to_col = self._state.display_position(move.to_square)
             self._state.apply_move(move)
-            self._last_move = ((from_row, from_col), (to_row, to_col))
+            self._last_move_squares = (move.from_square, move.to_square)
         except IllegalMoveError as exc:
             self._set_status_error(f"network player returned bad move: {exc}")
             return
@@ -382,7 +387,7 @@ class ChessApp(App):
             self._state,
             cursor=self._cursor,
             selected=self._selected,
-            last_move=self._last_move,
+            last_move_squares=self._last_move_squares,
         )
         self.query_one("#ranks-left", RankBar).refresh_ranks(self._state)
         self.query_one("#files-bot", FileBar).refresh_files(self._state)
@@ -623,7 +628,7 @@ class ChessApp(App):
     def action_reset(self) -> None:
         self._state.reset()
         self._selected = None
-        self._last_move = None
+        self._last_move_squares = None
         self._cursor = (7, 4)
         self._commit()
 
@@ -633,14 +638,9 @@ class ChessApp(App):
         text = text.strip()
         if not text:
             return
-        # Save the board state before the move
-        board_before = self._state.board.copy()
         try:
             move = self._state.apply_san(text)
-            # Set last move highlight
-            from_row, from_col = self._state.display_position(move.from_square)
-            to_row, to_col = self._state.display_position(move.to_square)
-            self._last_move = ((from_row, from_col), (to_row, to_col))
+            self._last_move_squares = (move.from_square, move.to_square)
         except (IllegalMoveError, ValueError, chess.AmbiguousMoveError):
             square = self._state.parse_display_square(text)
             if square is not None:
@@ -656,12 +656,11 @@ class ChessApp(App):
                 move = self._state.board.parse_uci(text)
                 if move not in self._state.legal_moves():
                     raise IllegalMoveError(f"illegal move: {text}")
-                from_row, from_col = self._state.display_position(move.from_square)
-                to_row, to_col = self._state.display_position(move.to_square)
                 self._state.apply_move(move)
-                self._last_move = ((from_row, from_col), (to_row, to_col))
+                self._last_move_squares = (move.from_square, move.to_square)
             else:
-                self._state.apply_san(text)
+                move = self._state.apply_san(text)
+                self._last_move_squares = (move.from_square, move.to_square)
         except (IllegalMoveError, ValueError, chess.InvalidMoveError, chess.AmbiguousMoveError) as exc:
             self._set_status_error(str(exc))
             return
