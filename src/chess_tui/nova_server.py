@@ -235,6 +235,8 @@ def _make_handler(
                 self._send_json(400, {"error": "missing 'fen' string in body"})
                 return
 
+            moves = payload.get("moves", [])
+
             try:
                 board = chess.Board(fen)
             except ValueError as exc:
@@ -251,6 +253,16 @@ def _make_handler(
                 move_num = board.fullmove_number
                 print(f"\n{'─' * 40}", flush=True)
                 print(f"Move {move_num} — {side} to move", flush=True)
+                if moves:
+                    # Format as pairs: "1. e4 e5 2. Nf3 Nf6 ..."
+                    move_pairs: list[str] = []
+                    for i in range(0, len(moves), 2):
+                        num = i // 2 + 1
+                        if i + 1 < len(moves):
+                            move_pairs.append(f"{num}. {moves[i]} {moves[i+1]}")
+                        else:
+                            move_pairs.append(f"{num}. {moves[i]}")
+                    print("Moves: " + " ".join(move_pairs), flush=True)
                 print(board, flush=True)
 
             # Simulate thinking time

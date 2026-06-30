@@ -91,9 +91,15 @@ def _make_handler(
                 print(f"\n{'─' * 40}", flush=True)
                 print(f"Move {move_num} — {side} to move", flush=True)
                 if moves:
-                    # Show last few moves
-                    recent = moves[-6:] if len(moves) > 6 else moves
-                    print(f"Recent: {' '.join(recent)}", flush=True)
+                    # Format as pairs: "1. e4 e5 2. Nf3 Nf6 ..."
+                    move_pairs: list[str] = []
+                    for i in range(0, len(moves), 2):
+                        num = i // 2 + 1
+                        if i + 1 < len(moves):
+                            move_pairs.append(f"{num}. {moves[i]} {moves[i+1]}")
+                        else:
+                            move_pairs.append(f"{num}. {moves[i]}")
+                    print("Moves: " + " ".join(move_pairs), flush=True)
                 print(board, flush=True)
 
             # Simulate thinking time
