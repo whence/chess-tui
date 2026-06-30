@@ -20,7 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chess
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
+# Navigate from src/chess_tui/ to project root
+PROJECT_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 
 
 def _load_engines_config() -> dict:
