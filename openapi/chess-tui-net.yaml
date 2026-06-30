@@ -65,6 +65,12 @@ components:
           type: string
           description: FEN string of the current position.
           example: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        moves:
+          type: array
+          items:
+            type: string
+          description: Move history in SAN (e.g. ["e4", "e5", "Nf3"]).
+          example: ["e4", "e5", "Nf3"]
 
     MoveResponse:
       type: object

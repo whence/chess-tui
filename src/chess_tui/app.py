@@ -344,8 +344,9 @@ class ChessApp(App):
             return
         # Set up status callback for countdown
         player.on_status = self._set_status_error
+        moves = self._state.san_history()
         try:
-            move = await player.choose_move(self._state.board)
+            move = await player.choose_move(self._state.board, moves=moves)
         finally:
             player.on_status = None
         try:

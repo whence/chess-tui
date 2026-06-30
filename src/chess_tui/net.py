@@ -84,16 +84,25 @@ def _post_json(url: str, payload: dict, *, timeout: float) -> dict:
         raise ServerError(200, raw.decode("utf-8", errors="replace")) from exc
 
 
-def request_move(url: str, fen: str, *, timeout: float = DEFAULT_TIMEOUT) -> str:
-    """POST ``{"fen": fen}`` to ``{url}/move`` and return the SAN string.
+def request_move(
+    url: str,
+    fen: str,
+    *,
+    moves: list[str] | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> str:
+    """POST ``{"fen": fen, "moves": [...]}`` to ``{url}/move`` and return the SAN string.
 
     Raises :class:`ServerError` (status >= 400), :class:`TransportError`
     (connection / timeout), or :class:`ServerBusyError` (503).
     The returned SAN is not validated against legality here — callers
     do that against their own board.
     """
+    body: dict = {"fen": fen}
+    if moves is not None:
+        body["moves"] = moves
     try:
-        payload = _post_json(f"{url.rstrip('/')}/move", {"fen": fen}, timeout=timeout)
+        payload = _post_json(f"{url.rstrip('/')}/move", body, timeout=timeout)
     except ServerError as exc:
         if exc.status == 503:
             raise ServerBusyError(f"server busy: {exc.body}") from exc

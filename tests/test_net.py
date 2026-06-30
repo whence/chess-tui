@@ -166,7 +166,7 @@ def test_network_player_retries_on_illegal_move_from_server() -> None:
     attempt_count = 0
     closed_port = _free_port()
 
-    def _mock_fetch(fen):
+    def _mock_fetch(fen, moves):
         nonlocal attempt_count
         attempt_count += 1
         if attempt_count >= 3:
@@ -175,7 +175,7 @@ def test_network_player_retries_on_illegal_move_from_server() -> None:
 
     import chess_tui.player as player_mod
     original = player_mod.NetworkPlayer._fetch_san
-    player_mod.NetworkPlayer._fetch_san = lambda self, fen: _mock_fetch(fen)
+    player_mod.NetworkPlayer._fetch_san = lambda self, fen, moves: _mock_fetch(fen, moves)
     try:
         player = NetworkPlayer(
             color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.01
@@ -193,7 +193,7 @@ def test_network_player_retries_on_server_error() -> None:
     attempt_count = 0
     closed_port = _free_port()
 
-    def _mock_fetch(fen):
+    def _mock_fetch(fen, moves):
         nonlocal attempt_count
         attempt_count += 1
         if attempt_count >= 3:
@@ -202,7 +202,7 @@ def test_network_player_retries_on_server_error() -> None:
 
     import chess_tui.player as player_mod
     original = player_mod.NetworkPlayer._fetch_san
-    player_mod.NetworkPlayer._fetch_san = lambda self, fen: _mock_fetch(fen)
+    player_mod.NetworkPlayer._fetch_san = lambda self, fen, moves: _mock_fetch(fen, moves)
     try:
         player = NetworkPlayer(
             color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.01
@@ -220,7 +220,7 @@ def test_network_player_retries_on_transport_error() -> None:
     closed_port = _free_port()
     attempts_made = 0
 
-    def _mock_fetch(fen):
+    def _mock_fetch(fen, moves):
         nonlocal attempts_made
         attempts_made += 1
         if attempts_made < 3:
@@ -229,7 +229,7 @@ def test_network_player_retries_on_transport_error() -> None:
 
     import chess_tui.player as player_mod
     original = player_mod.NetworkPlayer._fetch_san
-    player_mod.NetworkPlayer._fetch_san = lambda self, fen: _mock_fetch(fen)
+    player_mod.NetworkPlayer._fetch_san = lambda self, fen, moves: _mock_fetch(fen, moves)
     try:
         player = NetworkPlayer(
             color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.1
@@ -247,7 +247,7 @@ def test_network_player_retries_infinitely_on_transport_error() -> None:
     attempt_count = 0
     closed_port = _free_port()
 
-    def _mock_fetch(fen):
+    def _mock_fetch(fen, moves):
         nonlocal attempt_count
         attempt_count += 1
         if attempt_count >= 5:
@@ -256,7 +256,7 @@ def test_network_player_retries_infinitely_on_transport_error() -> None:
 
     import chess_tui.player as player_mod
     original = player_mod.NetworkPlayer._fetch_san
-    player_mod.NetworkPlayer._fetch_san = lambda self, fen: _mock_fetch(fen)
+    player_mod.NetworkPlayer._fetch_san = lambda self, fen, moves: _mock_fetch(fen, moves)
     try:
         player = NetworkPlayer(
             color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.01
@@ -274,7 +274,7 @@ def test_network_player_retries_on_illegal_move() -> None:
     attempt_count = 0
     closed_port = _free_port()
 
-    def _mock_fetch(fen):
+    def _mock_fetch(fen, moves):
         nonlocal attempt_count
         attempt_count += 1
         if attempt_count >= 4:
@@ -284,7 +284,7 @@ def test_network_player_retries_on_illegal_move() -> None:
 
     import chess_tui.player as player_mod
     original = player_mod.NetworkPlayer._fetch_san
-    player_mod.NetworkPlayer._fetch_san = lambda self, fen: _mock_fetch(fen)
+    player_mod.NetworkPlayer._fetch_san = lambda self, fen, moves: _mock_fetch(fen, moves)
     try:
         player = NetworkPlayer(
             color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.01

@@ -26,7 +26,9 @@ class Player(Protocol):
 
     color: chess.Color
 
-    async def choose_move(self, board: chess.Board) -> chess.Move: ...
+    async def choose_move(
+        self, board: chess.Board, moves: list[str] | None = None
+    ) -> chess.Move: ...
 
 
 @dataclass
@@ -35,7 +37,9 @@ class LocalPlayer:
 
     color: chess.Color
 
-    async def choose_move(self, board: chess.Board) -> chess.Move:
+    async def choose_move(
+        self, board: chess.Board, moves: list[str] | None = None
+    ) -> chess.Move:
         # The TUI's input handling drives local moves; this method should
         # never be called. Raise loudly if it is.
         raise RuntimeError("LocalPlayer.choose_move should not be called")
@@ -67,7 +71,9 @@ class NetworkPlayer:
         if self.on_status is not None:
             self.on_status(msg)
 
-    async def choose_move(self, board: chess.Board) -> chess.Move:
+    async def choose_move(
+        self, board: chess.Board, moves: list[str] | None = None
+    ) -> chess.Move:
         attempt = 0
         while True:
             attempt += 1
@@ -76,7 +82,9 @@ class NetworkPlayer:
                 # Run the blocking urllib call on a worker thread so the TUI
                 # event loop stays responsive.
                 loop = asyncio.get_running_loop()
-                san = await loop.run_in_executor(None, self._fetch_san, board.fen())
+                san = await loop.run_in_executor(
+                    None, self._fetch_san, board.fen(), moves
+                )
                 try:
                     move = board.parse_san(san)
                 except ValueError as exc:
@@ -101,8 +109,8 @@ class NetworkPlayer:
                     await asyncio.sleep(remaining % 1)
                 self._report(f"retrying (attempt {attempt + 1})...")
 
-    def _fetch_san(self, fen: str) -> str:
-        return net.request_move(self.url, fen, timeout=self.timeout)
+    def _fetch_san(self, fen: str, moves: list[str] | None) -> str:
+        return net.request_move(self.url, fen, moves=moves, timeout=self.timeout)
 
 
 class IllegalMoveError(ValueError):

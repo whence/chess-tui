@@ -56,6 +56,10 @@ def _make_handler() -> type[BaseHTTPRequestHandler]:
                 self._send_json(400, {"error": "missing 'fen' string in body"})
                 return
 
+            moves = payload.get("moves", [])
+            if not isinstance(moves, list):
+                moves = []
+
             try:
                 board = chess.Board(fen)
             except ValueError as exc:
@@ -81,6 +85,17 @@ def _make_handler() -> type[BaseHTTPRequestHandler]:
                 # Print the position and prompt
                 print("\n" + "─" * 32, flush=True)
                 print(f"[#{prompt_num}] Incoming position — FEN: {fen}", flush=True)
+                # Print move history above the board
+                if moves:
+                    # Format as pairs: "1. e4 e5 2. Nf3 Nf6 ..."
+                    move_pairs: list[str] = []
+                    for i in range(0, len(moves), 2):
+                        move_num = i // 2 + 1
+                        if i + 1 < len(moves):
+                            move_pairs.append(f"{move_num}. {moves[i]} {moves[i+1]}")
+                        else:
+                            move_pairs.append(f"{move_num}. {moves[i]}")
+                    print("Moves: " + " ".join(move_pairs), flush=True)
                 print(board, flush=True)
                 print(f"Side to move: {'White' if board.turn else 'Black'}", flush=True)
                 try:
