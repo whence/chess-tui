@@ -359,6 +359,7 @@ def main(argv: list[str] | None = None) -> None:
         help="print position and thinking info to stdout",
     )
     args = parser.parse_args(argv)
+    verbose = args.verbose
 
     # Load Nova config from engines.json
     config = _load_engines_config()
