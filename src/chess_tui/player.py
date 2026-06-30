@@ -65,6 +65,7 @@ class NetworkPlayer:
     color: chess.Color
     url: str
     timeout: float = 300.0
+    retry_delay: float = 10.0
     on_status: Callable[[str], None] | None = None
 
     def _report(self, msg: str) -> None:
@@ -98,15 +99,10 @@ class NetworkPlayer:
                 self._report("")
                 return move
             except Exception as exc:
-                # ANY error: compensate and retry with countdown
-                elapsed = time.monotonic() - start
-                remaining = max(0.0, self.timeout - elapsed)
-                # Countdown while waiting
-                for secs in range(int(remaining), 0, -1):
+                # ANY error: wait retry_delay then retry
+                for secs in range(int(self.retry_delay), 0, -1):
                     self._report(f"retrying in {secs}s (attempt {attempt}: {exc})")
                     await asyncio.sleep(1)
-                if remaining % 1 > 0:
-                    await asyncio.sleep(remaining % 1)
                 self._report(f"retrying (attempt {attempt + 1})...")
 
     def _fetch_san(self, fen: str, moves: list[str] | None) -> str:

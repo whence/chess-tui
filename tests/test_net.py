@@ -178,7 +178,7 @@ def test_network_player_retries_on_illegal_move_from_server() -> None:
     player_mod.NetworkPlayer._fetch_san = lambda self, fen, moves: _mock_fetch(fen, moves)
     try:
         player = NetworkPlayer(
-            color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.01
+            color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.01, retry_delay=0.01
         )
         with pytest.raises(KeyboardInterrupt):
             asyncio.run(player.choose_move(chess.Board()))
@@ -205,7 +205,7 @@ def test_network_player_retries_on_server_error() -> None:
     player_mod.NetworkPlayer._fetch_san = lambda self, fen, moves: _mock_fetch(fen, moves)
     try:
         player = NetworkPlayer(
-            color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.01
+            color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.01, retry_delay=0.01
         )
         with pytest.raises(KeyboardInterrupt):
             asyncio.run(player.choose_move(chess.Board()))
@@ -259,7 +259,7 @@ def test_network_player_retries_infinitely_on_transport_error() -> None:
     player_mod.NetworkPlayer._fetch_san = lambda self, fen, moves: _mock_fetch(fen, moves)
     try:
         player = NetworkPlayer(
-            color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.01
+            color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.01, retry_delay=0.01
         )
         with pytest.raises(KeyboardInterrupt):
             asyncio.run(player.choose_move(chess.Board()))
@@ -287,7 +287,7 @@ def test_network_player_retries_on_illegal_move() -> None:
     player_mod.NetworkPlayer._fetch_san = lambda self, fen, moves: _mock_fetch(fen, moves)
     try:
         player = NetworkPlayer(
-            color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.01
+            color=chess.WHITE, url=f"http://127.0.0.1:{closed_port}", timeout=0.01, retry_delay=0.01
         )
         with pytest.raises(KeyboardInterrupt):
             asyncio.run(player.choose_move(chess.Board()))
