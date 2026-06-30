@@ -366,7 +366,11 @@ class ChessApp(App):
         finally:
             player.on_status = None
         try:
+            # Get display positions before applying move
+            from_row, from_col = self._state.display_position(move.from_square)
+            to_row, to_col = self._state.display_position(move.to_square)
             self._state.apply_move(move)
+            self._last_move = ((from_row, from_col), (to_row, to_col))
         except IllegalMoveError as exc:
             self._set_status_error(f"network player returned bad move: {exc}")
             return
