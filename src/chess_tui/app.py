@@ -284,13 +284,13 @@ class ChessApp(App):
     """
 
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("up", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("left", "cursor_left", "Left", show=False),
-        Binding("right", "cursor_right", "Right", show=False),
-        Binding("space", "select_piece", "Select/Place", show=False),
+        Binding("up", "cursor_up", "Up", show=False, priority=True),
+        Binding("down", "cursor_down", "Down", show=False, priority=True),
+        Binding("left", "cursor_left", "Left", show=False, priority=True),
+        Binding("right", "cursor_right", "Right", show=False, priority=True),
+        Binding("space", "select_piece", "Select/Place", show=False, priority=True),
         Binding("enter", "confirm_selection", "Confirm", show=False),
-        Binding("escape", "cancel_selection", "Cancel", show=False),
+        Binding("escape", "cancel_selection", "Cancel", show=False, priority=True),
         Binding("f", "flip", "Flip board"),
         Binding("r", "reset", "Reset"),
         Binding("q", "quit", "Quit"),
@@ -452,25 +452,41 @@ class ChessApp(App):
 
     # ---- cursor actions --------------------------------------------------
 
+    def _input_has_focus(self) -> bool:
+        """Check if the text input widget has focus."""
+        try:
+            inp = self.query_one("#move-input", Input)
+            return inp.has_focus
+        except Exception:
+            return False
+
     def action_cursor_up(self) -> None:
+        if self._input_has_focus():
+            return
         row, col = self._cursor
         if row > 0:
             self._cursor = (row - 1, col)
             self.refresh_all()
 
     def action_cursor_down(self) -> None:
+        if self._input_has_focus():
+            return
         row, col = self._cursor
         if row < 7:
             self._cursor = (row + 1, col)
             self.refresh_all()
 
     def action_cursor_left(self) -> None:
+        if self._input_has_focus():
+            return
         row, col = self._cursor
         if col > 0:
             self._cursor = (row, col - 1)
             self.refresh_all()
 
     def action_cursor_right(self) -> None:
+        if self._input_has_focus():
+            return
         row, col = self._cursor
         if col < 7:
             self._cursor = (row, col + 1)
@@ -478,6 +494,8 @@ class ChessApp(App):
 
     def action_select_piece(self) -> None:
         """Space: select piece or place piece."""
+        if self._input_has_focus():
+            return  # Let input handle space
         row, col = self._cursor
         square = self._state.square_at(row, col)
         piece = self._state.piece_at(square)
@@ -544,6 +562,8 @@ class ChessApp(App):
 
     def action_cancel_selection(self) -> None:
         """Escape: cancel current selection."""
+        if self._input_has_focus():
+            return  # Let input handle escape
         if self._selected is not None:
             self._selected = None
             self._set_status("Selection cancelled")
