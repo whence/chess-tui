@@ -22,10 +22,25 @@ import chess
 import chess.engine
 
 
-# Default engine path (plentychess on macOS M1)
-DEFAULT_ENGINE = os.path.expanduser(
-    "~/projects/chess-engines/plentychess/plentychess-macos-m1-apple-silicon"
-)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# Navigate from src/chess_tui/ to project root
+PROJECT_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+
+
+def load_engines_config() -> dict:
+    """Load engine paths from engines.json."""
+    config_path = os.path.join(PROJECT_DIR, "engines.json")
+    try:
+        with open(config_path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Warning: engines.json not found or invalid: {e}", file=sys.stderr)
+        return {"engines": {}}
+
+
+def resolve_engine_path(path: str) -> str:
+    """Expand ~ and resolve the engine path."""
+    return os.path.expanduser(path)
 
 
 def _make_handler(
@@ -149,6 +164,11 @@ def _make_handler(
 def main(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
 
+    # Load engine config
+    engines_config = load_engines_config()
+    available_engines = list(engines_config.get("engines", {}).keys())
+    default_engine_name = available_engines[0] if available_engines else "plentychess"
+
     parser = argparse.ArgumentParser(
         prog="chess-tui-engine",
         description=(
@@ -164,9 +184,16 @@ def main(argv: list[str] | None = None) -> None:
         help="port to listen on (default: 8080)",
     )
     parser.add_argument(
+        "-e", "--engine-name",
+        default=default_engine_name,
+        choices=available_engines,
+        help=f"engine name from engines.json (default: {default_engine_name}). "
+             f"Available: {', '.join(available_engines)}",
+    )
+    parser.add_argument(
         "--engine",
-        default=DEFAULT_ENGINE,
-        help=f"path to UCI engine (default: {DEFAULT_ENGINE})",
+        default=None,
+        help="path to UCI engine (overrides --engine-name)",
     )
     parser.add_argument(
         "--depth",
@@ -205,8 +232,28 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
+    # Resolve engine path
+    if args.engine:
+        # Explicit path takes precedence
+        engine_path = resolve_engine_path(args.engine)
+        engine_name = os.path.basename(engine_path)
+    else:
+        # Look up from engines.json
+        engine_entry = engines_config.get("engines", {}).get(args.engine_name)
+        if not engine_entry:
+            print(f"Error: engine '{args.engine_name}' not found in engines.json", file=sys.stderr)
+            print(f"Available: {', '.join(available_engines)}", file=sys.stderr)
+            sys.exit(1)
+        if isinstance(engine_entry, str):
+            engine_path = resolve_engine_path(engine_entry)
+        elif isinstance(engine_entry, dict):
+            engine_path = resolve_engine_path(engine_entry.get("path", ""))
+        else:
+            print(f"Error: invalid engine config for '{args.engine_name}'", file=sys.stderr)
+            sys.exit(1)
+        engine_name = args.engine_name
+
     # Validate engine exists
-    engine_path = os.path.expanduser(args.engine)
     if not os.path.exists(engine_path):
         print(f"Error: engine not found at {engine_path}", file=sys.stderr)
         sys.exit(1)
@@ -232,7 +279,7 @@ def main(argv: list[str] | None = None) -> None:
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     print(
         f"chess-tui engine server listening on http://127.0.0.1:{args.port}\n"
-        f"  Engine: {os.path.basename(engine_path)}\n"
+        f"  Engine: {engine_name} ({os.path.basename(engine_path)})\n"
         f"  Limit: {limit_desc}\n"
         f"  Wait: {args.min_wait}-{args.max_wait}s\n"
         "  POST /move with {\"fen\": \"...\"} → {\"san\": \"...\"}\n"

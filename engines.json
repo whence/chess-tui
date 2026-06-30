@@ -1,0 +1,7 @@
+{
+  "engines": {
+    "plentychess": "~/projects/chess-engines/plentychess/plentychess-macos-m1-apple-silicon",
+    "stockfish": "~/projects/chess-engines/stockfish/stockfish-macos-m1-apple-silicon",
+    "dragon": "~/projects/chess-engines/dragon/dragon-macos-m1-apple-silicon"
+  }
+}
