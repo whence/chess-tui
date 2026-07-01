@@ -13,7 +13,7 @@ from textual_image.widget import AutoImage
 
 from . import net
 from .pieces import glyph, render_piece
-from .sound import play_click
+from .sound import play_click, play_capture
 from .player import LocalPlayer, NetworkPlayer, Player
 from .state import BoardState, IllegalMoveError
 from .themes import THEME, Theme
@@ -670,11 +670,13 @@ class ChessApp(App):
     ) -> None:
         """Apply a move and set up last-move highlight."""
         try:
+            # Check if this is a capture before applying the move
+            is_capture = self._state.piece_at(move.to_square) is not None
             self._state.apply_move(move)
             self._selected = None
             self._move_from_square = move.from_square
             self._move_to_square = move.to_square
-            self._commit(sound=True)
+            self._commit(sound=True, capture=is_capture)
         except IllegalMoveError as exc:
             self._set_status_error(str(exc))
 
@@ -700,9 +702,12 @@ class ChessApp(App):
 
     # ---- actions ---------------------------------------------------------
 
-    def _commit(self, *, sound: bool = False) -> None:
+    def _commit(self, *, sound: bool = False, capture: bool = False) -> None:
         if sound:
-            play_click()
+            if capture:
+                play_capture()
+            else:
+                play_click()
         self.refresh_all()
         self._maybe_request_network_move()
 
