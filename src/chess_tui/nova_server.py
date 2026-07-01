@@ -1,7 +1,9 @@
 """Nova-powered network player server for chess-tui.
 
 Run with ``uv run chess-tui-nova [options]``. Uses the Nova chess predictor
-to play moves at different ELO levels with a credit system for variability.
+to play moves at a chosen ELO, with per-move sampling knobs
+(``--temperature``, ``--top-p``, ``--blunder-rate``) to vary playing strength
+and style.
 
 The API is the same as chess-tui-net: POST /move with {"fen": "..."} → {"san": "..."}
 """
@@ -102,7 +104,12 @@ def _load_nova_predictor(model_path: str, classical: float = 0.5, aggression: fl
                 idx += 4096 * prom_map.get(move.promotion, 0)
             return idx
 
-        def predict_topk(self, fen, k=3, rating=None, legal_moves=None, board=None):
+        def predict_distribution(self, fen, rating, legal_moves):
+            """Return Nova's probability vector (length 16384) over legal moves.
+
+            Illegal move indices are masked to zero. Returns None if no legal
+            move receives nonzero probability.
+            """
             session = self._ensure_session()
             pos = self.fen_to_planes(fen)[np.newaxis]
             if rating is not None:
@@ -114,7 +121,6 @@ def _load_nova_predictor(model_path: str, classical: float = 0.5, aggression: fl
             logits, = session.run(None, {"positions": pos, "conditioning": cond})
             logits = logits[0]
 
-            # Mask legal moves and apply softmax
             legal = np.zeros(16384, dtype=bool)
             for mv in legal_moves:
                 legal[self.move_to_index(mv)] = True
@@ -126,91 +132,81 @@ def _load_nova_predictor(model_path: str, classical: float = 0.5, aggression: fl
             if total <= 0:
                 return None
             probs /= total
+            return probs
 
-            # Get top-k
-            scored = []
-            for mv in legal_moves:
-                p = probs[self.move_to_index(mv)]
-                scored.append((p, mv))
-            scored.sort(key=lambda x: -x[0])
+        def sample_move(
+            self,
+            probs,
+            legal_moves,
+            *,
+            temperature=1.0,
+            top_p=1.0,
+            blunder_rate=0.0,
+            rng,
+        ):
+            """Sample a move from Nova's policy with temperature, top-p, and blunder rate.
 
-            result = []
-            for p, mv in scored[:k]:
-                san = board.san(mv) if board else mv.uci()
-                result.append({"move": san, "p": round(float(p) * 100, 1)})
-            return result
+            Returns a (chess.Move, was_blunder) tuple.
+
+            - temperature: 0 = greedy; <1 sharpens (more confident);
+              >1 flattens (more random).
+            - top_p: nucleus sampling — keep only the smallest set of top moves
+              whose cumulative probability exceeds this threshold. 1.0 = no
+              filtering.
+            - blunder_rate: probability of replacing the sampled move with a
+              uniformly random legal move, simulating an outright mistake.
+            """
+            if not legal_moves:
+                raise ValueError("legal_moves is empty")
+
+            # 1. Optional outright blunder: pick a uniformly random legal move.
+            if blunder_rate > 0 and rng.random() < blunder_rate:
+                return rng.choice(legal_moves), True
+
+            # 2. Build a probability array aligned with legal_moves.
+            p = np.array(
+                [probs[self.move_to_index(mv)] for mv in legal_moves],
+                dtype=np.float64,
+            )
+
+            # 3. Greedy mode (T=0): always pick the most probable legal move.
+            if temperature == 0:
+                best_i = max(range(len(legal_moves)), key=lambda i: p[i])
+                return legal_moves[best_i], False
+
+            # 4. Apply temperature (T<1 sharpens, T>1 flattens).
+            if temperature != 1.0:
+                logits = np.log(np.clip(p, 1e-12, 1.0)) / temperature
+                logits -= logits.max()
+                p = np.exp(logits)
+                p /= p.sum()
+
+            # 5. Top-p / nucleus filtering.
+            if top_p < 1.0:
+                order = np.argsort(p)[::-1]
+                cumsum = np.cumsum(p[order])
+                n_keep = max(1, int((cumsum < top_p).sum()) + 1)
+                kept = order[:n_keep]
+                p = p[kept]
+                p /= p.sum()
+                legal_moves = [legal_moves[i] for i in kept]
+
+            # 6. Weighted sample from the (possibly filtered) distribution.
+            i = int(rng.choices(range(len(legal_moves)), weights=p, k=1)[0])
+            return legal_moves[i], False
 
     return NovaPredictor(model_path, classical, aggression)
 
 
-class NovaPlayer:
-    """Manages ELO selection with credit system."""
-
-    def __init__(
-        self,
-        elo: int,
-        elo_low: int | None = None,
-        elo_low_credit: int = 1,
-        elo_high: int | None = None,
-        elo_high_credit: int = 1,
-    ):
-        self.elo = elo
-        self.elo_low = elo_low if elo_low is not None else elo
-        self.elo_high = elo_high if elo_high is not None else elo
-        self.elo_low_credit = elo_low_credit
-        self.elo_high_credit = elo_high_credit
-        self._elo_low_remaining = elo_low_credit
-        self._elo_high_remaining = elo_high_credit
-
-    def reset_credits(self) -> None:
-        """Reset credits to initial values."""
-        self._elo_low_remaining = self.elo_low_credit
-        self._elo_high_remaining = self.elo_high_credit
-
-    def choose_elo(self, rng: random.Random) -> tuple[int, str]:
-        """Choose which ELO level to use based on credits.
-
-        Returns (elo, source) where source is 'low', 'high', or 'base'.
-        """
-        # Calculate probabilities
-        low_prob = self._elo_low_remaining / 50 if self._elo_low_remaining > 0 else 0
-        high_prob = self._elo_high_remaining / 50 if self._elo_high_remaining > 0 else 0
-        base_prob = 1.0 - low_prob - high_prob
-
-        # Roll the dice
-        roll = rng.random()
-
-        if roll < low_prob and self._elo_low_remaining > 0:
-            self._elo_low_remaining -= 1
-            print(
-                f"  [nova] roll={roll:.3f} < {low_prob:.3f} → elo_low={self.elo_low} "
-                f"(remaining: {self._elo_low_remaining}/{self.elo_low_credit})",
-                flush=True,
-            )
-            return self.elo_low, "low"
-        elif roll < low_prob + high_prob and self._elo_high_remaining > 0:
-            self._elo_high_remaining -= 1
-            print(
-                f"  [nova] roll={roll:.3f} < {low_prob + high_prob:.3f} → elo_high={self.elo_high} "
-                f"(remaining: {self._elo_high_remaining}/{self.elo_high_credit})",
-                flush=True,
-            )
-            return self.elo_high, "high"
-        else:
-            print(
-                f"  [nova] roll={roll:.3f} → elo_base={self.elo}",
-                flush=True,
-            )
-            return self.elo, "base"
-
-
 def _make_handler(
     nova_model,
-    player: NovaPlayer,
     rng: random.Random,
     min_wait: float,
     max_wait: float,
-    top_n: int,
+    elo: int,
+    temperature: float,
+    top_p: float,
+    blunder_rate: float,
 ) -> type[BaseHTTPRequestHandler]:
     """Create a request handler with Nova configuration."""
 
@@ -266,41 +262,48 @@ def _make_handler(
             print(f"  [nova] thinking for {wait_time:.1f}s...", flush=True)
             time.sleep(wait_time)
 
-            # Choose ELO level
-            chosen_elo, source = player.choose_elo(rng)
-
-            # Get move from Nova
+            # Get Nova's full policy distribution over legal moves.
             legal_moves = list(board.legal_moves)
-            top_moves = nova_model.predict_topk(
-                fen, k=max(top_n, 5), rating=chosen_elo, legal_moves=legal_moves, board=board
+            probs = nova_model.predict_distribution(
+                fen, rating=elo, legal_moves=legal_moves
             )
-
-            if not top_moves:
+            if probs is None:
                 self._send_json(500, {"error": "nova failed to produce moves"})
                 return
 
-            # Select move based on top_n
-            if top_n <= 1 or len(top_moves) == 1:
-                # Always pick the top move
-                move_san = top_moves[0]["move"]
-                print(f"  [nova] top move: {move_san} (elo={chosen_elo}, source={source})", flush=True)
+            # Print top 5 raw moves from Nova (for debugging)
+            top5 = sorted(
+                [(mv, float(probs[nova_model.move_to_index(mv)])) for mv in legal_moves],
+                key=lambda x: -x[1]
+            )[:5]
+            print("  [nova] top 5:", flush=True)
+            for mv, p in top5:
+                san = board.san(mv)
+                print(f"    {san}: {p*100:.1f}%", flush=True)
+
+            # Sample a move with temperature / top-p / blunder-rate.
+            move, was_blunder = nova_model.sample_move(
+                probs,
+                legal_moves,
+                temperature=temperature,
+                top_p=top_p,
+                blunder_rate=blunder_rate,
+                rng=rng,
+            )
+            move_san = board.san(move)
+            p_chosen = float(probs[nova_model.move_to_index(move)]) * 100
+            if was_blunder:
+                print(
+                    f"  [nova] BLUNDER: {move_san} (p={p_chosen:.1f}%, "
+                    f"elo={elo}, T={temperature}, top_p={top_p})",
+                    flush=True,
+                )
             else:
-                # Weighted random selection from top_n moves
-                candidates = top_moves[:top_n]
-                total = sum(m["p"] for m in candidates)
-                print(f"  [nova] top {len(candidates)} moves (elo={chosen_elo}, source={source}):", flush=True)
-                for m in candidates:
-                    normalized = m["p"] / total * 100
-                    print(f"    {m['move']}: {m['p']:.1f} → {normalized:.1f}%", flush=True)
-                roll = rng.random() * total
-                cumulative = 0.0
-                move_san = candidates[0]["move"]  # fallback
-                for m in candidates:
-                    cumulative += m["p"]
-                    if roll <= cumulative:
-                        move_san = m["move"]
-                        break
-                print(f"  [nova] chose: {move_san}", flush=True)
+                print(
+                    f"  [nova] chose: {move_san} (p={p_chosen:.1f}%, "
+                    f"elo={elo}, T={temperature}, top_p={top_p})",
+                    flush=True,
+                )
 
             self._send_json(200, {"san": move_san})
 
@@ -338,31 +341,36 @@ def main(argv: list[str] | None = None) -> None:
         "--elo",
         type=int,
         required=True,
-        help="base ELO level (required)",
+        help="ELO level to condition Nova on (required, 800-2700)",
     )
     parser.add_argument(
-        "--elo-low",
-        type=int,
-        default=None,
-        help="lower ELO level (default: same as --elo)",
+        "--temperature",
+        type=float,
+        default=1.0,
+        help=(
+            "sampling temperature (>=0). 0 = greedy; 1.0 = Nova's natural "
+            "distribution; <1 sharpens (more confident); >1 flattens (more random). "
+            "Default: 1.0"
+        ),
     )
     parser.add_argument(
-        "--elo-low-credit",
-        type=int,
-        default=1,
-        help="credit count for elo-low (default: 1)",
+        "--top-p",
+        type=float,
+        default=1.0,
+        help=(
+            "nucleus sampling cutoff (0, 1]. Keep only the smallest set of top "
+            "moves whose cumulative probability exceeds this value. "
+            "1.0 = no filtering. Default: 1.0"
+        ),
     )
     parser.add_argument(
-        "--elo-high",
-        type=int,
-        default=None,
-        help="higher ELO level (default: same as --elo)",
-    )
-    parser.add_argument(
-        "--elo-high-credit",
-        type=int,
-        default=1,
-        help="credit count for elo-high (default: 1)",
+        "--blunder-rate",
+        type=float,
+        default=0.0,
+        help=(
+            "probability of replacing the sampled move with a uniformly random "
+            "legal move, to simulate outright mistakes (0.0-1.0). Default: 0.0"
+        ),
     )
     parser.add_argument(
         "--min-wait",
@@ -377,12 +385,6 @@ def main(argv: list[str] | None = None) -> None:
         help="maximum thinking time in seconds (default: 3.0)",
     )
     parser.add_argument(
-        "--top-n",
-        type=int,
-        default=1,
-        help="pick from top N moves (normalized probabilities, default: 1)",
-    )
-    parser.add_argument(
         "--classical",
         type=float,
         default=0.5,
@@ -395,6 +397,14 @@ def main(argv: list[str] | None = None) -> None:
         help="aggression level (0.0-1.0, default: 0.5)",
     )
     args = parser.parse_args(argv)
+
+    # Validate sampling-knob ranges.
+    if args.temperature < 0:
+        parser.error("--temperature must be >= 0")
+    if not (0.0 < args.top_p <= 1.0):
+        parser.error("--top-p must be in (0.0, 1.0]")
+    if not (0.0 <= args.blunder_rate <= 1.0):
+        parser.error("--blunder-rate must be in [0.0, 1.0]")
 
     # Load Nova config from engines.json
     config = _load_engines_config()
@@ -420,38 +430,28 @@ def main(argv: list[str] | None = None) -> None:
     nova_model = _load_nova_predictor(model_path, classical, aggression)
     print("Nova model loaded.", flush=True)
 
-    # Create player with credits
-    player = NovaPlayer(
-        elo=args.elo,
-        elo_low=args.elo_low,
-        elo_low_credit=args.elo_low_credit,
-        elo_high=args.elo_high,
-        elo_high_credit=args.elo_high_credit,
-    )
-
-    # Create RNG with random seed
+    # Create RNG
     rng = random.Random()
 
     handler = _make_handler(
         nova_model=nova_model,
-        player=player,
         rng=rng,
         min_wait=args.min_wait,
         max_wait=args.max_wait,
-        top_n=args.top_n,
+        elo=args.elo,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        blunder_rate=args.blunder_rate,
     )
-
-    # Print config
-    elo_low_desc = f"{args.elo_low} (credit: {args.elo_low_credit})" if args.elo_low != args.elo else "same as --elo"
-    elo_high_desc = f"{args.elo_high} (credit: {args.elo_high_credit})" if args.elo_high != args.elo else "same as --elo"
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     print(
         f"chess-tui nova server listening on http://127.0.0.1:{args.port}\n"
         f"  Model: Nova\n"
-        f"  Base ELO: {args.elo}\n"
-        f"  Low ELO: {elo_low_desc}\n"
-        f"  High ELO: {elo_high_desc}\n"
+        f"  ELO: {args.elo}\n"
+        f"  Temperature: {args.temperature}\n"
+        f"  Top-p: {args.top_p}\n"
+        f"  Blunder rate: {args.blunder_rate}\n"
         f"  Wait: {args.min_wait}-{args.max_wait}s\n"
         "  POST /move with {\"fen\": \"...\"} → {\"san\": \"...\"}\n"
         "  Ctrl-C to stop.",
