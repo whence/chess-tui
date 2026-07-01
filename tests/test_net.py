@@ -512,7 +512,7 @@ def test_chess_tui_cli_no_flags_uses_local_players() -> None:
     seen: list[dict[chess.Color, Player]] = []
 
     class _FakeApp:
-        def __init__(self, players=None):
+        def __init__(self, state=None, players=None):
             seen.append(players or {})
 
         def run(self):
@@ -539,7 +539,7 @@ def test_chess_tui_cli_white_flag_routes_white_to_network() -> None:
     seen: list[dict[chess.Color, Player]] = []
 
     class _FakeApp:
-        def __init__(self, players=None):
+        def __init__(self, state=None, players=None):
             seen.append(players or {})
 
         def run(self):
@@ -566,7 +566,7 @@ def test_chess_tui_cli_both_flags_routes_both_to_network() -> None:
     seen: list[dict[chess.Color, Player]] = []
 
     class _FakeApp:
-        def __init__(self, players=None):
+        def __init__(self, state=None, players=None):
             seen.append(players or {})
 
         def run(self):
@@ -587,6 +587,33 @@ def test_chess_tui_cli_both_flags_routes_both_to_network() -> None:
     players = seen[0]
     assert players[chess.WHITE].url == "http://w.example:1"
     assert players[chess.BLACK].url == "http://b.example:2"
+
+
+def test_chess_tui_cli_fen_option() -> None:
+    from chess_tui.app import main
+
+    seen_state = [None]
+
+    class _FakeApp:
+        def __init__(self, state=None, players=None):
+            seen_state[0] = state
+
+        def run(self):
+            raise SystemExit(0)
+
+    import chess_tui.app as app_mod
+    real = app_mod.ChessApp
+    app_mod.ChessApp = _FakeApp
+    try:
+        with pytest.raises(SystemExit):
+            main(["--fen", "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"])
+    finally:
+        app_mod.ChessApp = real
+
+    state = seen_state[0]
+    assert state is not None
+    # Verify the board is in the expected position (white played e4)
+    assert state.turn() == chess.BLACK
 
 
 # ---- End-to-end TUI: NetworkPlayer drives the game ----------------------------

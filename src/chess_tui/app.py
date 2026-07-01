@@ -255,6 +255,11 @@ class ChessApp(App):
     #move-input {
         height: 3;
     }
+    #promotion-selector {
+        height: 5;
+        border: round $warning;
+        display: none;
+    }
     #help-bar {
         height: 1;
         dock: bottom;
@@ -293,6 +298,10 @@ class ChessApp(App):
         self._selected: tuple[int, int] | None = None
         # Last move highlight as square indices (flip-independent)
         self._last_move_squares: tuple[int, int] | None = None  # (from_sq, to_sq)
+        # Promotion pending state
+        self._promotion_pending: bool = False
+        self._promotion_from_square: int | None = None
+        self._promotion_to_square: int | None = None
 
     # ---- composition -----------------------------------------------------
 
@@ -311,8 +320,9 @@ class ChessApp(App):
                     yield Static("Moves:", id="move-history-text")
                 yield ListView(id="move-list")
                 yield Input(placeholder="Enter move (SAN or UCI), or from-square…", id="move-input")
+                yield ListView(id="promotion-selector")
         yield TextLine(
-            "Arrow keys: navigate • Space: select/place • "
+            "↑↓←→: navigate • Space: select/place • "
             "Enter: confirm • Esc: cancel • f: flip • r: reset • q: quit",
             id="help-bar",
         )
@@ -540,11 +550,9 @@ class ChessApp(App):
                     to_rank = chess.square_rank(to_square)
                     if (piece.color == chess.WHITE and to_rank == 7) or \
                        (piece.color == chess.BLACK and to_rank == 0):
-                        # Try queen promotion
-                        move = chess.Move(from_square, to_square, promotion=chess.QUEEN)
-                        if move in self._state.legal_moves():
-                            self._apply_move_with_highlight(move, from_row, from_col, row, col)
-                            return
+                        # Show promotion selector
+                        self._show_promotion_selector(from_square, to_square)
+                        return
 
                 # Try to select a different piece of the correct color
                 if piece is not None and piece.color == self._state.turn():
@@ -576,6 +584,76 @@ class ChessApp(App):
             self._selected = None
             self._set_status("Selection cancelled")
             self.refresh_all()
+        elif self._promotion_pending:
+            self._cancel_promotion()
+
+    def _show_promotion_selector(self, from_square: int, to_square: int) -> None:
+        """Show the promotion piece selector."""
+        self._promotion_pending = True
+        self._promotion_from_square = from_square
+        self._promotion_to_square = to_square
+        self._selected = None
+
+        # Get piece color to determine promotion pieces
+        piece = self._state.piece_at(from_square)
+        color = piece.color if piece else self._state.turn()
+
+        # Create promotion options
+        promotion_pieces = [
+            (chess.QUEEN, "Queen"),
+            (chess.ROOK, "Rook"),
+            (chess.BISHOP, "Bishop"),
+            (chess.KNIGHT, "Knight"),
+        ]
+
+        # Get the promotion piece symbols
+        selector = self.query_one("#promotion-selector", ListView)
+        selector.clear()
+
+        for piece_type, name in promotion_pieces:
+            # Create a temporary piece to get the symbol
+            temp_piece = chess.Piece(piece_type, color)
+            symbol = glyph(temp_piece)
+            item = ListItem(Label(f"{symbol} {name}"))
+            setattr(item, "_promotion_piece", piece_type)
+            selector.append(item)
+
+        # Show the selector
+        selector.display = True
+        selector.focus()
+        self._set_status("Select promotion piece")
+
+    def _cancel_promotion(self) -> None:
+        """Cancel the pending promotion."""
+        self._promotion_pending = False
+        self._promotion_from_square = None
+        self._promotion_to_square = None
+        selector = self.query_one("#promotion-selector", ListView)
+        selector.display = False
+        self._set_status("Promotion cancelled")
+        self.refresh_all()
+
+    def _apply_promotion(self, piece_type: int) -> None:
+        """Apply the promotion with the selected piece type."""
+        if not self._promotion_pending:
+            return
+
+        from_square = self._promotion_from_square
+        to_square = self._promotion_to_square
+
+        # Create the promotion move
+        move = chess.Move(from_square, to_square, promotion=piece_type)
+
+        # Hide the selector
+        selector = self.query_one("#promotion-selector", ListView)
+        selector.display = False
+        self._promotion_pending = False
+
+        # Apply the move
+        if move in self._state.legal_moves():
+            self._apply_move_with_highlight(move, 0, 0, 0, 0)  # Coordinates don't matter for the move
+        else:
+            self._set_status_error("Illegal promotion move")
 
     def _apply_move_with_highlight(
         self,
@@ -602,6 +680,13 @@ class ChessApp(App):
         self._handle_input(text)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
+        # Check if this is a promotion selection
+        promotion_piece = getattr(event.item, "_promotion_piece", None)
+        if promotion_piece is not None and self._promotion_pending:
+            self._apply_promotion(promotion_piece)
+            return
+
+        # Otherwise, it's a move selection
         uci = getattr(event.item, _MOVE_ATTR, None)
         if uci is None:
             return
@@ -708,6 +793,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="disable click sound",
     )
+    parser.add_argument(
+        "--fen",
+        metavar="FEN",
+        help="starting FEN position",
+    )
     args = parser.parse_args(argv)
 
     if args.silent:
@@ -723,7 +813,17 @@ def main(argv: list[str] | None = None) -> None:
     else:
         players[chess.BLACK] = LocalPlayer(color=chess.BLACK)
 
-    ChessApp(players=players).run()
+    # Create initial state from FEN if provided
+    state = None
+    if args.fen:
+        try:
+            board = chess.Board(args.fen)
+            state = BoardState(board=board)
+        except ValueError as exc:
+            print(f"Error: invalid FEN: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+    ChessApp(state=state, players=players).run()
 
 
 if __name__ == "__main__":
