@@ -1,0 +1,40 @@
+Third-party notices
+====================
+
+This project bundles third-party assets. The full texts of the licenses
+referenced below are available at the URLs in each section.
+
+---------------------------------------------------------------------
+1. Cburnett chess piece set (src/chess_tui/pieces/*.png)
+---------------------------------------------------------------------
+
+Source: https://commons.wikimedia.org/wiki/Category:PNG_chess_pieces/Standard_transparent
+Author: Cburnett (https://commons.wikimedia.org/wiki/User:Cburnett)
+License: GNU Free Documentation License v1.2 or later
+         and/or
+         Creative Commons Attribution-ShareAlike 3.0 Unported
+         (https://creativecommons.org/licenses/by-sa/3.0/deed.en)
+
+The 60×60 transparent PNGs were downloaded from Wikimedia Commons and
+upscaled to 64×64 with Lanczos resampling. The underlying artwork is
+unchanged.
+
+Files derived from:
+
+  Chess_plt60.png  -> wP.png
+  Chess_nlt60.png  -> wN.png
+  Chess_blt60.png  -> wB.png
+  Chess_rlt60.png  -> wR.png
+  Chess_qlt60.png  -> wQ.png
+  Chess_klt60.png  -> wK.png
+  Chess_pdt60.png  -> bP.png
+  Chess_ndt60.png  -> bN.png
+  Chess_bdt60.png  -> bB.png
+  Chess_rdt60.png  -> bR.png
+  Chess_qdt60.png  -> bQ.png
+  Chess_kdt60.png  -> bK.png
+
+The Cburnett set is itself a derivative of an SVG originally released by
+Cburnett under GFDL/CC BY-SA. Both the GFDL and the CC BY-SA 3.0 terms
+require that derivative works (including this project) preserve the
+attribution above and the license notices.
