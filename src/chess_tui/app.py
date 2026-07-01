@@ -75,12 +75,8 @@ class Cell(Static):
             self.styles.color = ""
         else:
             self.glyph = glyph(piece) or " "
-            # Use contrasting color based on background
-            if cursor or selected or last_move:
-                # On highlighted backgrounds, use dark piece color
-                self.styles.color = "#1a1a1a"
-            else:
-                self.styles.color = dark_piece_fg if piece.color == chess.BLACK else light_piece_fg
+            # Always use color based on piece color
+            self.styles.color = dark_piece_fg if piece.color == chess.BLACK else light_piece_fg
 
         self.update(self.glyph)
 
@@ -259,8 +255,9 @@ class ChessApp(App):
     #move-input {
         height: 3;
     }
-    #help {
-        height: auto;
+    #help-bar {
+        height: 1;
+        dock: bottom;
         color: $text-muted;
     }
     """
@@ -314,11 +311,11 @@ class ChessApp(App):
                     yield Static("Moves:", id="move-history-text")
                 yield ListView(id="move-list")
                 yield Input(placeholder="Enter move (SAN or UCI), or from-square…", id="move-input")
-                yield TextLine(
-                    "Arrow keys: navigate • Space: select/place • "
-                    "Enter: confirm • Esc: cancel • f: flip • r: reset • q: quit",
-                    id="help",
-                )
+        yield TextLine(
+            "Arrow keys: navigate • Space: select/place • "
+            "Enter: confirm • Esc: cancel • f: flip • r: reset • q: quit",
+            id="help-bar",
+        )
 
     def on_mount(self) -> None:
         self.refresh_all()
