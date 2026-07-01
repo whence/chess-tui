@@ -234,7 +234,7 @@ class ChessApp(App):
         padding: 1 0;
     }
     #move-history {
-        height: 8;
+        height: 12;
         border: round $secondary;
         padding: 0 1;
     }
