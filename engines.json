@@ -5,8 +5,6 @@
     "dragon": "~/projects/chess-engines/dragon/dragon-macos-m1-apple-silicon"
   },
   "nova": {
-    "path": "../en-croissant/mybooks/nova_v3b.onnx",
-    "classical": 0.5,
-    "aggression": 0.5
+    "path": "../en-croissant/mybooks/nova_v3b.onnx"
   }
 }

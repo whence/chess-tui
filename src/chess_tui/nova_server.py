@@ -382,6 +382,18 @@ def main(argv: list[str] | None = None) -> None:
         default=1,
         help="pick from top N moves (normalized probabilities, default: 1)",
     )
+    parser.add_argument(
+        "--classical",
+        type=float,
+        default=0.5,
+        help="classical vs neural network weight (0.0-1.0, default: 0.5)",
+    )
+    parser.add_argument(
+        "--aggression",
+        type=float,
+        default=0.5,
+        help="aggression level (0.0-1.0, default: 0.5)",
+    )
     args = parser.parse_args(argv)
 
     # Load Nova config from engines.json
@@ -392,8 +404,8 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     model_path = os.path.expanduser(nova_config.get("path", ""))
-    classical = nova_config.get("classical", 0.5)
-    aggression = nova_config.get("aggression", 0.5)
+    classical = args.classical
+    aggression = args.aggression
 
     if not os.path.exists(model_path):
         print(f"Error: Nova model not found at {model_path}", file=sys.stderr)
