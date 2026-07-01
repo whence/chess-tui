@@ -85,16 +85,16 @@ class BoardWidget(Static):
     DEFAULT_CSS: ClassVar[str] = """
     BoardWidget {
         height: 24;
-        width: 40;
+        width: 48;
     }
     #board-grid {
         grid-size: 8 8;
         grid-gutter: 0;
-        width: 40;
+        width: 48;
         height: 24;
     }
     Cell {
-        width: 5;
+        width: 6;
         height: 3;
     }
     """
@@ -177,7 +177,7 @@ class FileBar(Static):
 
     DEFAULT_CSS: ClassVar[str] = """
     FileBar {
-        width: 43;
+        width: 51;
         height: 1;
     }
     """
@@ -185,8 +185,8 @@ class FileBar(Static):
     def refresh_files(self, state: BoardState) -> None:
         parts = ["   "]  # blank for rank-column alignment
         for c in range(8):
-            # File char centered in a 5-char cell.
-            parts.append(f"  {state.file_label(c)}  ")
+            # File char centered in a 6-char cell.
+            parts.append(f"  {state.file_label(c)}   ")
         self.update("".join(parts))
 
 
@@ -216,7 +216,7 @@ class ChessApp(App):
     }
     #board-inner {
         layout: vertical;
-        width: 43;
+        width: 51;
         height: 25;
     }
     #board-row {

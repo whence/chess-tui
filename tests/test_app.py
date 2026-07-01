@@ -277,14 +277,18 @@ async def test_game_over_displays_result() -> None:
 
 
 async def test_board_block_is_horizontally_centered_in_board_area() -> None:
-    """The whole board block (rank column + cells + file bar = 43 wide)
-    should sit in the middle of board-area."""
+    """The whole board block (rank column + cells + file bar = 51 wide)
+    should sit in the middle of board-area, or left-aligned at x=0 if
+    it's wider than board-area (which happens on narrow terminals)."""
     async with run_app() as (app, pilot):
         await pilot.pause()
         ba = app.query_one("#board-area")
         bi = app.query_one("#board-inner")
-        # board-inner is 43 wide (3 for rank + 40 cells); center it.
-        expected_x = ba.region.x + (ba.region.width - bi.region.width) // 2
+        # board-inner is 51 wide (3 for rank + 48 cells); center it.
+        # When the board is wider than board-area (e.g. 80-col terminal
+        # with the 32-col side panel), the math gives a negative offset
+        # and the layout just pins it to x=0.
+        expected_x = max(0, ba.region.x + (ba.region.width - bi.region.width) // 2)
         assert bi.region.x == expected_x, (
             f"board-inner at x={bi.region.x}, expected x={expected_x} "
             f"(ba width={ba.region.width}, bi width={bi.region.width})"
@@ -337,9 +341,9 @@ async def test_file_bar_shows_a_to_h_unflipped() -> None:
         await pilot.pause()
         fb = app.query_one("#files-bot", FileBar)
         text = _bar_text(fb).rstrip("\n")
-        # 43 chars total: 3-char blank + 8 file labels, each in a 5-char cell
-        assert len(text) == 43
-        assert text == "   " + "".join(f"  {c}  " for c in "abcdefgh"), text
+        # 51 chars total: 3-char blank + 8 file labels, each in a 6-char cell
+        assert len(text) == 51
+        assert text == "   " + "".join(f"  {c}   " for c in "abcdefgh"), text
 
 
 async def test_file_bar_flips_to_h_to_a() -> None:
@@ -349,21 +353,21 @@ async def test_file_bar_flips_to_h_to_a() -> None:
         await pilot.pause()
         fb = app.query_one("#files-bot", FileBar)
         text = _bar_text(fb).rstrip("\n")
-        assert text == "   " + "".join(f"  {c}  " for c in "hgfedcba"), text
+        assert text == "   " + "".join(f"  {c}   " for c in "hgfedcba"), text
 
 
 async def test_file_labels_align_with_board_cells() -> None:
-    """Each file label is centered in a 5-char cell whose center matches
+    """Each file label is centered in a 6-char cell whose center matches
     the center of the corresponding board cell."""
     async with run_app() as (app, pilot):
         await pilot.pause()
         fb = app.query_one("#files-bot", FileBar)
         bw = app.query_one("#board")
         text = _bar_text(fb).rstrip("\n")
-        # File label at index 3 + c*5 + 2 should match board cell c center
-        # (board cell c is at x=bw.region.x + c*5 + 2 in a 5-char cell).
+        # File label at index 3 + c*6 + 2 should match board cell c center
+        # (board cell c is at x=bw.region.x + c*6 + 2 in a 6-char cell).
         for c in range(8):
-            label_char = text[3 + c * 5 + 2]
+            label_char = text[3 + c * 6 + 2]
             assert label_char == "abcdefgh"[c], (
                 f"file {c} mismatch: got {label_char!r}"
             )
