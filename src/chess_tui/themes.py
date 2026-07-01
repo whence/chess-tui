@@ -37,7 +37,7 @@ THEME = Theme(
     dark_square="#b58863",
     selected="#FFFF00",   # yellow
     move_from="#90EE90",  # light green
-    move_to="#FFB6C1",    # light pink
+    move_to="#90EE90",    # light green (same as move_from)
     cursor="#00CED1",     # dark turquoise
     cursor_sel="#FFD700", # gold
 )

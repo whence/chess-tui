@@ -361,13 +361,15 @@ class ChessApp(App):
         finally:
             player.on_status = None
         try:
+            # Check if this is a capture before applying the move
+            is_capture = self._state.piece_at(move.to_square) is not None
             self._state.apply_move(move)
             self._move_from_square = move.from_square
             self._move_to_square = move.to_square
         except IllegalMoveError as exc:
             self._set_status_error(f"network player returned bad move: {exc}")
             return
-        self._commit()
+        self._commit(sound=True, capture=is_capture)
 
     def refresh_all(self) -> None:
         board = self.query_one("#board", BoardWidget)
@@ -730,7 +732,12 @@ class ChessApp(App):
         if not text:
             return
         try:
-            move = self._state.apply_san(text)
+            # Parse the move without applying it
+            move = self._state.board.parse_san(text)
+            # Check if this is a capture before applying the move
+            is_capture = self._state.piece_at(move.to_square) is not None
+            # Now apply the move
+            self._state.apply_move(move)
             self._move_from_square = move.from_square
             self._move_to_square = move.to_square
         except (IllegalMoveError, ValueError, chess.AmbiguousMoveError):
@@ -740,7 +747,7 @@ class ChessApp(App):
                 return
             self._set_status_error(f"unrecognized input: {text!r}")
             return
-        self._commit(sound=True)
+        self._commit(sound=True, capture=is_capture)
 
     def _try_apply(self, text: str, *, is_uci: bool = False) -> None:
         try:
@@ -748,17 +755,24 @@ class ChessApp(App):
                 move = self._state.board.parse_uci(text)
                 if move not in self._state.legal_moves():
                     raise IllegalMoveError(f"illegal move: {text}")
+                # Check if this is a capture before applying the move
+                is_capture = self._state.piece_at(move.to_square) is not None
                 self._state.apply_move(move)
                 self._move_from_square = move.from_square
                 self._move_to_square = move.to_square
             else:
-                move = self._state.apply_san(text)
+                # Parse the move without applying it
+                move = self._state.board.parse_san(text)
+                # Check if this is a capture before applying the move
+                is_capture = self._state.piece_at(move.to_square) is not None
+                # Now apply the move
+                self._state.apply_move(move)
                 self._move_from_square = move.from_square
                 self._move_to_square = move.to_square
         except (IllegalMoveError, ValueError, chess.InvalidMoveError, chess.AmbiguousMoveError) as exc:
             self._set_status_error(str(exc))
             return
-        self._commit(sound=True)
+        self._commit(sound=True, capture=is_capture)
 
     def _show_destinations(self, square: chess.Square) -> None:
         move_list = self.query_one("#move-list", ListView)
