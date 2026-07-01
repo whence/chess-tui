@@ -9,9 +9,10 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Input, Label, ListItem, ListView, Static
+from textual_image.widget import AutoImage
 
 from . import net
-from .pieces import glyph
+from .pieces import glyph, render_piece
 from .sound import play_click
 from .player import LocalPlayer, NetworkPlayer, Player
 from .state import BoardState, IllegalMoveError
@@ -30,55 +31,40 @@ def _parse_color(spec: str) -> str:
     return spec
 
 
-class Cell(Static):
-    """A single square on the rendered board."""
+class Cell(AutoImage, Renderable=AutoImage._Renderable):
+    """A single square on the rendered board.
+
+    The cell delegates image rendering to :class:`AutoImage`, which picks
+    the best protocol the terminal supports (Sixel / TGP / half-cell /
+    Unicode).  The piece is alpha-composited onto the cell's highlight
+    colour up-front by :func:`render_piece` so the renderer always gets a
+    fully-opaque image — the cell highlight colour is baked into the
+    image, not parsed by the renderer.
+    """
 
     def __init__(self, row: int, col: int) -> None:
-        super().__init__(" ", id=f"cell-{row}-{col}")
+        super().__init__(id=f"cell-{row}-{col}")
         self.row = row
         self.col = col
-        self.glyph: str = " "
+        # The piece currently displayed on this cell, or None if empty.
+        # Read by tests and the promotion selector; the actual image is
+        # stored in ``self.image`` (set by ``set_piece``).
+        self.piece: chess.Piece | None = None
 
-    def set_piece(
-        self,
-        piece: chess.Piece | None,
-        *,
-        light: bool,
-        light_bg: str,
-        dark_bg: str,
-        light_piece_fg: str,
-        dark_piece_fg: str,
-        cursor: bool = False,
-        selected: bool = False,
-        last_move: bool = False,
-    ) -> None:
-        # Determine background color
-        if cursor and selected:
-            # Cursor on selected piece: bright highlight
-            bg = "#FFD700"  # gold
-        elif cursor:
-            # Cursor only: cyan highlight
-            bg = "#00CED1"  # dark turquoise
-        elif selected:
-            # Selected piece's square: yellow
-            bg = "#FFFF00"  # yellow
-        elif last_move:
-            # Last move highlight: semi-transparent green
-            bg = "#90EE90"  # light green
-        else:
-            bg = light_bg if light else dark_bg
+    def set_piece(self, piece: chess.Piece | None, *, bg: str) -> None:
+        """Show ``piece`` (or nothing) on a square tinted ``bg``.
 
-        self.styles.background = _parse_color(bg)
-
+        ``bg`` is the highlight colour for the cell — it is both the
+        cell's CSS background and the colour the piece image is
+        composited onto, so the highlight shows through the piece's
+        transparent areas on every rendering protocol.
+        """
+        self.piece = piece
         if piece is None:
-            self.glyph = " "
-            self.styles.color = ""
+            self.image = None
         else:
-            self.glyph = glyph(piece) or " "
-            # Always use color based on piece color
-            self.styles.color = dark_piece_fg if piece.color == chess.BLACK else light_piece_fg
-
-        self.update(self.glyph)
+            self.image = render_piece(piece, bg=bg)
+        self.styles.background = _parse_color(bg)
 
 
 class TextLine(Static):
@@ -98,20 +84,18 @@ class BoardWidget(Static):
 
     DEFAULT_CSS: ClassVar[str] = """
     BoardWidget {
-        height: 8;
-        width: 24;
+        height: 24;
+        width: 40;
     }
     #board-grid {
         grid-size: 8 8;
         grid-gutter: 0;
-        width: 24;
-        height: 8;
+        width: 40;
+        height: 24;
     }
     Cell {
-        width: 3;
-        height: 1;
-        content-align: center middle;
-        text-style: bold;
+        width: 5;
+        height: 3;
     }
     """
 
@@ -130,20 +114,13 @@ class BoardWidget(Static):
         state: BoardState,
         cursor: tuple[int, int] | None = None,
         selected: tuple[int, int] | None = None,
-        last_move_squares: tuple[int, int] | None = None,
+        move_from: int | None = None,
+        move_to: int | None = None,
     ) -> None:
-        light_bg = self.theme.light_square
-        dark_bg = self.theme.dark_square
-        light_fg = self.theme.light_piece
-        dark_fg = self.theme.dark_piece
-        # Convert last move squares to display coordinates
-        last_move_display: tuple[tuple[int, int], tuple[int, int]] | None = None
-        if last_move_squares is not None:
-            from_sq, to_sq = last_move_squares
-            last_move_display = (
-                state.display_position(from_sq),
-                state.display_position(to_sq),
-            )
+        theme = self.theme
+        # Convert move squares to display coordinates
+        from_pos = state.display_position(move_from) if move_from is not None else None
+        to_pos = state.display_position(move_to) if move_to is not None else None
         for row in range(8):
             for col in range(8):
                 square = state.square_at(row, col)
@@ -152,34 +129,46 @@ class BoardWidget(Static):
                 cell = self.query_one(f"#cell-{row}-{col}", Cell)
                 is_cursor = cursor == (row, col)
                 is_selected = selected == (row, col)
-                is_last_move = last_move_display is not None and (
-                    (row, col) == last_move_display[0] or (row, col) == last_move_display[1]
-                )
-                cell.set_piece(
-                    piece,
-                    light=light,
-                    light_bg=light_bg,
-                    dark_bg=dark_bg,
-                    light_piece_fg=light_fg,
-                    dark_piece_fg=dark_fg,
-                    cursor=is_cursor,
-                    selected=is_selected,
-                    last_move=is_last_move,
-                )
+                is_move_to = to_pos == (row, col)
+                is_move_from = from_pos == (row, col)
+                # Highlight priority: cursor (with selected override) > selected >
+                # move_to > move_from > standard square colour.
+                if is_cursor and is_selected:
+                    bg = theme.cursor_sel
+                elif is_cursor:
+                    bg = theme.cursor
+                elif is_selected:
+                    bg = theme.selected
+                elif is_move_to:
+                    bg = theme.move_to
+                elif is_move_from:
+                    bg = theme.move_from
+                else:
+                    bg = theme.light_square if light else theme.dark_square
+                cell.set_piece(piece, bg=bg)
 
 
 class RankBar(Static):
-    """Vertical column of rank labels on the left of the board."""
+    """Vertical column of rank labels on the left of the board.
+
+    Renders 24 lines (3 lines per rank × 8 ranks) so each digit lands
+    on the middle row of its corresponding 3-line cell.
+    """
 
     DEFAULT_CSS: ClassVar[str] = """
     RankBar {
         width: 3;
-        height: 8;
+        height: 24;
     }
     """
 
     def refresh_ranks(self, state: BoardState) -> None:
-        lines = [f" {state.rank_label(r):>2}" for r in range(8)]
+        lines: list[str] = []
+        for r in range(8):
+            # Pad to 3 lines so the digit vertically-centers in the cell.
+            lines.append("   ")  # top padding
+            lines.append(f" {state.rank_label(r):>2}")  # label
+            lines.append("   ")  # bottom padding
         self.update("\n".join(lines))
 
 
@@ -188,7 +177,7 @@ class FileBar(Static):
 
     DEFAULT_CSS: ClassVar[str] = """
     FileBar {
-        width: 27;
+        width: 43;
         height: 1;
     }
     """
@@ -196,7 +185,8 @@ class FileBar(Static):
     def refresh_files(self, state: BoardState) -> None:
         parts = ["   "]  # blank for rank-column alignment
         for c in range(8):
-            parts.append(f" {state.file_label(c)} ")
+            # File char centered in a 5-char cell.
+            parts.append(f"  {state.file_label(c)}  ")
         self.update("".join(parts))
 
 
@@ -226,8 +216,8 @@ class ChessApp(App):
     }
     #board-inner {
         layout: vertical;
-        width: 27;
-        height: 9;
+        width: 43;
+        height: 25;
     }
     #board-row {
         layout: horizontal;
@@ -296,8 +286,11 @@ class ChessApp(App):
         self._cursor: tuple[int, int] = (7, 4)  # Start at e1
         # Selected piece square (display row, col) or None
         self._selected: tuple[int, int] | None = None
-        # Last move highlight as square indices (flip-independent)
-        self._last_move_squares: tuple[int, int] | None = None  # (from_sq, to_sq)
+        # Last move highlight as square indices (flip-independent).
+        # Tracked as two separate squares so the from- and to-squares
+        # can be tinted differently in the theme.
+        self._move_from_square: int | None = None
+        self._move_to_square: int | None = None
         # Promotion pending state
         self._promotion_pending: bool = False
         self._promotion_from_square: int | None = None
@@ -329,6 +322,16 @@ class ChessApp(App):
 
     def on_mount(self) -> None:
         self.refresh_all()
+        # Default focus + first-item highlight on the move list so Enter
+        # immediately picks the alphabetically-first legal move, falling
+        # back to the input only when the user tabs to it explicitly.
+        try:
+            move_list = self.query_one("#move-list", ListView)
+            if move_list.children:
+                move_list.index = 0
+            move_list.focus()
+        except Exception:
+            pass
         # Trigger network move on mount if it's network player's turn
         self.call_later(self._maybe_request_network_move)
 
@@ -359,7 +362,8 @@ class ChessApp(App):
             player.on_status = None
         try:
             self._state.apply_move(move)
-            self._last_move_squares = (move.from_square, move.to_square)
+            self._move_from_square = move.from_square
+            self._move_to_square = move.to_square
         except IllegalMoveError as exc:
             self._set_status_error(f"network player returned bad move: {exc}")
             return
@@ -371,7 +375,8 @@ class ChessApp(App):
             self._state,
             cursor=self._cursor,
             selected=self._selected,
-            last_move_squares=self._last_move_squares,
+            move_from=self._move_from_square,
+            move_to=self._move_to_square,
         )
         self.query_one("#ranks-left", RankBar).refresh_ranks(self._state)
         self.query_one("#files-bot", FileBar).refresh_files(self._state)
@@ -667,7 +672,8 @@ class ChessApp(App):
         try:
             self._state.apply_move(move)
             self._selected = None
-            self._last_move_squares = (move.from_square, move.to_square)
+            self._move_from_square = move.from_square
+            self._move_to_square = move.to_square
             self._commit(sound=True)
         except IllegalMoveError as exc:
             self._set_status_error(str(exc))
@@ -707,7 +713,8 @@ class ChessApp(App):
     def action_reset(self) -> None:
         self._state.reset()
         self._selected = None
-        self._last_move_squares = None
+        self._move_from_square = None
+        self._move_to_square = None
         self._cursor = (7, 4)
         self._commit()
 
@@ -719,7 +726,8 @@ class ChessApp(App):
             return
         try:
             move = self._state.apply_san(text)
-            self._last_move_squares = (move.from_square, move.to_square)
+            self._move_from_square = move.from_square
+            self._move_to_square = move.to_square
         except (IllegalMoveError, ValueError, chess.AmbiguousMoveError):
             square = self._state.parse_display_square(text)
             if square is not None:
@@ -736,10 +744,12 @@ class ChessApp(App):
                 if move not in self._state.legal_moves():
                     raise IllegalMoveError(f"illegal move: {text}")
                 self._state.apply_move(move)
-                self._last_move_squares = (move.from_square, move.to_square)
+                self._move_from_square = move.from_square
+                self._move_to_square = move.to_square
             else:
                 move = self._state.apply_san(text)
-                self._last_move_squares = (move.from_square, move.to_square)
+                self._move_from_square = move.from_square
+                self._move_to_square = move.to_square
         except (IllegalMoveError, ValueError, chess.InvalidMoveError, chess.AmbiguousMoveError) as exc:
             self._set_status_error(str(exc))
             return

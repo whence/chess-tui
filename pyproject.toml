@@ -8,6 +8,8 @@ dependencies = [
     "chess>=1.10",
     "numpy>=1.24",
     "onnxruntime>=1.16",
+    "textual-image>=0.12",
+    "pillow>=10.0",
 ]
 
 [project.scripts]
@@ -25,6 +27,8 @@ packages = ["src/chess_tui"]
 include = [
     "src/chess_tui/*.py",
     "src/chess_tui/*.wav",
+    "src/chess_tui/pieces/*.png",
+    "THIRD_PARTY_NOTICES.txt",
     "openapi/*.yaml",
 ]
 

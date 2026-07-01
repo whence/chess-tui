@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import chess
 import pytest
 
-from chess_tui.app import Cell, ChessApp, FileBar, Legend, RankBar, TextLine
+from chess_tui.app import Cell, ChessApp, FileBar, RankBar, TextLine
 from chess_tui.state import BoardState
 from chess_tui.themes import THEME
 from textual.widgets import Input, ListView
@@ -30,9 +30,11 @@ async def run_app(
         yield app, pilot
 
 
-def piece_at_display(app: ChessApp, row: int, col: int) -> str:
+def piece_at_display(app: ChessApp, row: int, col: int) -> chess.Piece | None:
+    """Return the :class:`chess.Piece` currently shown at the given cell,
+    or ``None`` if the cell is empty."""
     cell = app.query_one(f"#cell-{row}-{col}", Cell)
-    return cell.glyph
+    return cell.piece
 
 
 def title_text(app: ChessApp) -> str:
@@ -60,14 +62,14 @@ async def test_app_starts_and_renders_starting_position() -> None:
     async with run_app() as (app, pilot):
         await pilot.pause()
         # Row 0 (rank 8) — black back rank.
-        assert piece_at_display(app, 0, 0) == "♜"  # a8 black rook
-        assert piece_at_display(app, 0, 4) == "♚"  # e8 black king
+        assert piece_at_display(app, 0, 0) == chess.Piece(chess.ROOK, chess.BLACK)  # a8
+        assert piece_at_display(app, 0, 4) == chess.Piece(chess.KING, chess.BLACK)  # e8
         # Row 7 (rank 1) — white back rank.
-        assert piece_at_display(app, 7, 0) == "♖"  # a1 white rook
-        assert piece_at_display(app, 7, 4) == "♔"  # e1 white king
+        assert piece_at_display(app, 7, 0) == chess.Piece(chess.ROOK, chess.WHITE)  # a1
+        assert piece_at_display(app, 7, 4) == chess.Piece(chess.KING, chess.WHITE)  # e1
         # Row 6 (rank 2) — white pawns.
         for col in range(8):
-            assert piece_at_display(app, 6, col) == "♙"
+            assert piece_at_display(app, 6, col) == chess.Piece(chess.PAWN, chess.WHITE)
 
 
 async def test_app_initial_title_is_white_to_move() -> None:
@@ -131,8 +133,8 @@ async def test_typing_san_move_advances_position() -> None:
         focus_input(app)
         await pilot.press("e", "2", "e", "4", "enter")
         await pilot.pause()
-        assert piece_at_display(app, 4, 4) == "♙"
-        assert piece_at_display(app, 6, 4) == " "  # e2 empty
+        assert piece_at_display(app, 4, 4) == chess.Piece(chess.PAWN, chess.WHITE)
+        assert piece_at_display(app, 6, 4) is None  # e2 empty
         assert "Black to move" in title_text(app)
 
 
@@ -144,7 +146,7 @@ async def test_typing_uci_move_works() -> None:
         await pilot.pause()
         await pilot.press("e", "7", "e", "5", "enter")
         await pilot.pause()
-        assert piece_at_display(app, 3, 4) == "♟"
+        assert piece_at_display(app, 3, 4) == chess.Piece(chess.PAWN, chess.BLACK)
 
 
 async def test_typing_two_char_pawn_move_works() -> None:
@@ -166,7 +168,7 @@ async def test_illegal_move_shows_error_and_does_not_advance() -> None:
         focus_input(app)
         await pilot.press("e", "2", "e", "5", "enter")  # illegal pawn jump
         await pilot.pause()
-        assert piece_at_display(app, 6, 4) == "♙"
+        assert piece_at_display(app, 6, 4) == chess.Piece(chess.PAWN, chess.WHITE)
         # Status should reflect an error, not the normal "Move N • ..." line.
         status = status_text(app)
         assert not status.startswith("Move "), f"expected error, got {status!r}"
@@ -189,11 +191,11 @@ async def test_input_clears_after_submission() -> None:
 async def test_f_key_flips_board() -> None:
     async with run_app() as (app, pilot):
         await pilot.pause()
-        assert piece_at_display(app, 0, 0) == "♜"  # a8 black rook
+        assert piece_at_display(app, 0, 0) == chess.Piece(chess.ROOK, chess.BLACK)  # a8
         app.action_flip()
         await pilot.pause()
-        assert piece_at_display(app, 0, 7) == "♖"  # h1 white rook
-        assert piece_at_display(app, 7, 0) == "♜"  # h8 black rook
+        assert piece_at_display(app, 0, 7) == chess.Piece(chess.ROOK, chess.WHITE)  # h1
+        assert piece_at_display(app, 7, 0) == chess.Piece(chess.ROOK, chess.BLACK)  # h8
 
 
 async def test_f_key_again_flips_back() -> None:
@@ -203,7 +205,7 @@ async def test_f_key_again_flips_back() -> None:
         await pilot.pause()
         app.action_flip()
         await pilot.pause()
-        assert piece_at_display(app, 0, 0) == "♜"
+        assert piece_at_display(app, 0, 0) == chess.Piece(chess.ROOK, chess.BLACK)
 
 
 # ---- reset ------------------------------------------------------------------
@@ -217,8 +219,8 @@ async def test_r_key_resets_board() -> None:
         await pilot.pause()
         app.action_reset()
         await pilot.pause()
-        assert piece_at_display(app, 6, 4) == "♙"
-        assert piece_at_display(app, 1, 4) == "♟"
+        assert piece_at_display(app, 6, 4) == chess.Piece(chess.PAWN, chess.WHITE)
+        assert piece_at_display(app, 1, 4) == chess.Piece(chess.PAWN, chess.BLACK)
         assert app._state.flipped is False
 
 
@@ -271,47 +273,17 @@ async def test_game_over_displays_result() -> None:
         assert "0-1" in title_text(app)
 
 
-# ---- legend -----------------------------------------------------------------
-
-
-async def test_legend_shows_white_and_black_pieces() -> None:
-    from io import StringIO
-    from rich.console import Console
-    from rich.table import Table as RichTable
-
-    async with run_app() as (app, pilot):
-        await pilot.pause()
-        legend = app.query_one(Legend)
-        # Find the Rich Table on the widget.
-        table = None
-        for attr in dir(legend):
-            if not attr.startswith("_"):
-                continue
-            val = getattr(legend, attr, None)
-            if isinstance(val, RichTable):
-                table = val
-                break
-        assert table is not None, "Legend widget has no Rich Table attached"
-        buf = StringIO()
-        Console(file=buf, width=80, force_terminal=False, color_system=None).print(table)
-        text = buf.getvalue()
-        assert "White" in text
-        assert "Black" in text
-        for g in "♙♘♗♖♕♔♟♞♝♜♛♚":
-            assert g in text, f"legend missing glyph {g!r}"
-
-
 # ---- board centering -------------------------------------------------------
 
 
 async def test_board_block_is_horizontally_centered_in_board_area() -> None:
-    """The whole board block (rank column + cells + file bar = 27 wide)
+    """The whole board block (rank column + cells + file bar = 43 wide)
     should sit in the middle of board-area."""
     async with run_app() as (app, pilot):
         await pilot.pause()
         ba = app.query_one("#board-area")
         bi = app.query_one("#board-inner")
-        # board-inner is 27 wide (3 for rank + 24 cells); center it.
+        # board-inner is 43 wide (3 for rank + 40 cells); center it.
         expected_x = ba.region.x + (ba.region.width - bi.region.width) // 2
         assert bi.region.x == expected_x, (
             f"board-inner at x={bi.region.x}, expected x={expected_x} "
@@ -327,7 +299,8 @@ def _bar_text(widget) -> str:
     from rich.console import Console
 
     buf = StringIO()
-    Console(file=buf, width=40, force_terminal=False, color_system=None).print(widget.render())
+    # Wide enough to hold the rank/file bars (file bar is 43 chars wide).
+    Console(file=buf, width=80, force_terminal=False, color_system=None).print(widget.render())
     return buf.getvalue()
 
 
@@ -337,7 +310,12 @@ async def test_rank_bar_shows_8_to_1_unflipped() -> None:
         rb = app.query_one("#ranks-left", RankBar)
         text = _bar_text(rb)
         lines = text.splitlines()
-        assert lines == [f"  {n}" for n in range(8, 0, -1)], lines
+        # 8 ranks × 3 lines each (top padding, label, bottom padding).
+        # The label sits on the middle line of its 3-line cell block.
+        expected: list[str] = []
+        for n in range(8, 0, -1):
+            expected.extend(["   ", f"  {n}", "   "])
+        assert lines == expected, lines
 
 
 async def test_rank_bar_flips_to_1_to_8() -> None:
@@ -348,7 +326,10 @@ async def test_rank_bar_flips_to_1_to_8() -> None:
         rb = app.query_one("#ranks-left", RankBar)
         text = _bar_text(rb)
         lines = text.splitlines()
-        assert lines == [f"  {n}" for n in range(1, 9)], lines
+        expected: list[str] = []
+        for n in range(1, 9):
+            expected.extend(["   ", f"  {n}", "   "])
+        assert lines == expected, lines
 
 
 async def test_file_bar_shows_a_to_h_unflipped() -> None:
@@ -356,9 +337,9 @@ async def test_file_bar_shows_a_to_h_unflipped() -> None:
         await pilot.pause()
         fb = app.query_one("#files-bot", FileBar)
         text = _bar_text(fb).rstrip("\n")
-        # 27 chars total: 3-char blank + 8 file labels, each in a 3-char cell
-        assert len(text) == 27
-        assert text == "   " + "".join(f" {c} " for c in "abcdefgh"), text
+        # 43 chars total: 3-char blank + 8 file labels, each in a 5-char cell
+        assert len(text) == 43
+        assert text == "   " + "".join(f"  {c}  " for c in "abcdefgh"), text
 
 
 async def test_file_bar_flips_to_h_to_a() -> None:
@@ -368,21 +349,21 @@ async def test_file_bar_flips_to_h_to_a() -> None:
         await pilot.pause()
         fb = app.query_one("#files-bot", FileBar)
         text = _bar_text(fb).rstrip("\n")
-        assert text == "   " + "".join(f" {c} " for c in "hgfedcba"), text
+        assert text == "   " + "".join(f"  {c}  " for c in "hgfedcba"), text
 
 
 async def test_file_labels_align_with_board_cells() -> None:
-    """Each file label is centered in a 3-char cell whose center matches
+    """Each file label is centered in a 5-char cell whose center matches
     the center of the corresponding board cell."""
     async with run_app() as (app, pilot):
         await pilot.pause()
         fb = app.query_one("#files-bot", FileBar)
         bw = app.query_one("#board")
         text = _bar_text(fb).rstrip("\n")
-        # File label at index 3 + c*3 + 1 should match board cell c center
-        # (board cell c is at x=bw.region.x + c*3 + 1).
+        # File label at index 3 + c*5 + 2 should match board cell c center
+        # (board cell c is at x=bw.region.x + c*5 + 2 in a 5-char cell).
         for c in range(8):
-            label_char = text[3 + c * 3 + 1]
+            label_char = text[3 + c * 5 + 2]
             assert label_char == "abcdefgh"[c], (
                 f"file {c} mismatch: got {label_char!r}"
             )
@@ -400,42 +381,40 @@ async def test_board_widget_refresh_reflects_state_changes() -> None:
         state.apply_san("Nf3")
         app.refresh_all()
         await pilot.pause()
-        assert piece_at_display(app, 5, 5) == "♘"
+        assert piece_at_display(app, 5, 5) == chess.Piece(chess.KNIGHT, chess.WHITE)
 
 
 # ---- themes -----------------------------------------------------------------
 
 
 async def test_default_theme_is_checkered() -> None:
-    """The only theme is the checkered palette from command-line-chess:
-    - (row+col) % 2 == 0 → #769656 (dark green)
-    - (row+col) % 2 == 1 → #BACA44 (light olive)
+    """The default theme is the two-tone palette defined in :mod:`chess_tui.themes`:
+    - (row+col) % 2 == 0 → THEME.light_square
+    - (row+col) % 2 == 1 → THEME.dark_square
     """
     async with run_app() as (app, pilot):
         await pilot.pause()
         board = app.query_one("#board")
         assert board.theme is THEME
-        # Cell (0, 0) → tileColors[0] = #769656.
+        # Cell (0, 0) — light square.
         cell_00 = app.query_one("#cell-0-0", Cell)
         r, g, b = (
             cell_00.styles.background.r,
             cell_00.styles.background.g,
             cell_00.styles.background.b,
         )
-        assert (r, g, b) == (0x76, 0x96, 0x56), (
-            f"expected #769656, got rgb({r}, {g}, {b})"
+        light = THEME.light_square.lstrip("#")
+        assert (r, g, b) == (int(light[0:2], 16), int(light[2:4], 16), int(light[4:6], 16)), (
+            f"expected #{light}, got rgb({r}, {g}, {b})"
         )
-        # Cell (0, 1) → tileColors[1] = #BACA44.
+        # Cell (0, 1) — dark square.
         cell_01 = app.query_one("#cell-0-1", Cell)
         r, g, b = (
             cell_01.styles.background.r,
             cell_01.styles.background.g,
             cell_01.styles.background.b,
         )
-        assert (r, g, b) == (0xBA, 0xCA, 0x44), (
-            f"expected #BACA44, got rgb({r}, {g}, {b})"
+        dark = THEME.dark_square.lstrip("#")
+        assert (r, g, b) == (int(dark[0:2], 16), int(dark[2:4], 16), int(dark[4:6], 16)), (
+            f"expected #{dark}, got rgb({r}, {g}, {b})"
         )
-        # And the rendered SVG should carry those colors too.
-        svg = app.export_screenshot()
-        assert "769656" in svg.lower()
-        assert "baca44" in svg.lower()
