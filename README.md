@@ -2,6 +2,24 @@
 
 A terminal chess application with network play support.
 
+## Why another chess TUI?
+
+There are already great terminal chess apps out there:
+
+- [chess-tui](https://github.com/thomas-mauran/chess-tui) (Rust) — Local play, Stockfish, Lichess, custom skins
+- [cli-chess](https://github.com/trevorbayless/cli-chess) (Python) — Lichess online, Fairy-Stockfish offline
+- [chess-cli](https://github.com/Nemo984/chess-cli) (Go) — UCI engine play, game database
+
+**This one is different because:**
+
+1. **Network player architecture** — Players are HTTP servers. Run `chess-tui-engine` or `chess-tui-nova` on one machine, play from another.
+2. **Nova neural network engine** — Uses the [Nova chess predictor](https://huggingface.co/novachess/novachess-engine) with sampling knobs (`--temperature`, `--top-p`, `--blunder-rate`) to create human-like play at any strength.
+3. **Image-based pieces** — Renders actual PNG piece images (via [textual-image](https://github.com/voidstarHQ/textual-image)) for crisp graphics in supported terminals.
+4. **Move/capture sounds** — Different sounds for regular moves and captures.
+5. **Promotion selector** — Visual picker when pawn reaches the last rank.
+6. **FEN support** — Start from any position with `--fen`.
+7. **Python/Textual** — Easy to extend, modify, and contribute to.
+
 ## Setup
 
 ```bash
