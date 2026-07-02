@@ -5,7 +5,7 @@ A terminal chess application with network play support.
 ## Setup
 
 ```bash
-git clone git@github.com:whence/chess-tui.git
+git clone https://github.com/whence/chess-tui.git
 cd chess-tui
 uv sync
 ```
