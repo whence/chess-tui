@@ -14,7 +14,7 @@ There are already great terminal chess apps out there:
 
 1. **Network player architecture** — Players are HTTP servers. Run `chess-tui-engine` or `chess-tui-nova` on one machine, play from another.
 2. **Nova neural network engine** — Uses the [Nova chess predictor](https://huggingface.co/novachess/novachess-engine) with sampling knobs (`--temperature`, `--top-p`, `--blunder-rate`) to create human-like play at any strength.
-3. **Image-based pieces** — Renders actual PNG piece images (via [textual-image](https://github.com/voidstarHQ/textual-image)) for crisp graphics. Requires modern terminals with image support like [cmux](https://cmux.com/) or [Ghostty](https://ghostty.org/).
+3. **Image-based pieces** — Renders actual PNG piece images (via [textual-image](https://github.com/voidstarHQ/textual-image)) for crisp graphics. Verified working on [cmux](https://cmux.com/) and [Kitty](https://sw.kovidgoyal.net/kitty/), which both implement the Kitty Graphics Protocol's `U=1` unicode-placeholder placement that `textual-image` relies on. Also works on [Ghostty](https://ghostty.org/). **Not supported on wezterm or iTerm2** — both report TGP support but lack the `U=1` diacritic placement mode, so the image protocol selection in `textual-image` silently no-ops there. Other terminals fall through to half-cell rendering (blurry but functional).
 4. **Move/capture sounds** — Different sounds for regular moves and captures.
 5. **Promotion selector** — Visual picker when pawn reaches the last rank.
 6. **FEN support** — Start from any position with `--fen`.
