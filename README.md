@@ -12,8 +12,8 @@ There are already great terminal chess apps out there:
 
 **This one is different because:**
 
-1. **Network player architecture** — Players are HTTP servers. Run `chess-tui-engine` or `chess-tui-nova` on one machine, play from another.
-2. **Nova neural network engine** — Uses the [Nova chess predictor](https://huggingface.co/novachess/novachess-engine) with sampling knobs (`--temperature`, `--top-p`, `--blunder-rate`) to create human-like play at any strength.
+1. **Network player architecture** — Players are HTTP servers. Run `chess-tui-engine`, `chess-tui-nova`, or `chess-tui-maia` on one machine, play from another. Any two can be matched against each other (e.g. Nova vs. Maia at the same ELO) since they all speak the same RESTful protocol.
+2. **Two neural network engines** — Uses either the [Nova chess predictor](https://huggingface.co/novachess/novachess-engine) (style-conditioned, with `--temperature` / `--top-p` / `--blunder-rate` knobs) or the [Maia-3 human-move predictor](https://huggingface.co/collections/MaiaChess/maia3) (Elo-conditioned, with `--temperature` / `--top-p` / `--use-history`). Both produce human-like play at any strength.
 3. **Image-based pieces** — Renders actual PNG piece images (via [textual-image](https://github.com/voidstarHQ/textual-image)) for crisp graphics. Verified working on [cmux](https://cmux.com/) and [Kitty](https://sw.kovidgoyal.net/kitty/), which both implement the Kitty Graphics Protocol's `U=1` unicode-placeholder placement that `textual-image` relies on. Also works on [Ghostty](https://ghostty.org/). **Not supported on wezterm or iTerm2** — both report TGP support but lack the `U=1` diacritic placement mode, so the image protocol selection in `textual-image` silently no-ops there. Other terminals fall through to half-cell rendering (blurry but functional).
 4. **Move/capture sounds** — Different sounds for regular moves and captures.
 5. **Promotion selector** — Visual picker when pawn reaches the last rank.
@@ -115,6 +115,117 @@ uv run chess-tui-nova 8082 --elo 1000 --temperature 1.3 --top-p 0.95 --blunder-r
   sampled move with a uniformly random legal move, simulating an outright
   human-style mistake.
 
+### chess-tui-maia
+
+Maia-3 (5M) human-move predictor, driven via UCI. Uses Elo conditioning
+(`Elo` / `SelfElo` / `OppoElo`) plus the same `Temperature` / `TopP`
+sampling knobs as Nova. Exposes the same `POST /move` RESTful protocol as
+the other network players, so it can substitute for Nova in any TUI match.
+
+The `maia3` Python package is **not** a chess-tui dependency — it is
+installed separately. The server reads the `maia3-5m` (or equivalent)
+executable path from `engines.json` and spawns it as a long-lived UCI
+subprocess.
+
+```bash
+uv run chess-tui-maia 8083 --elo 1500
+uv run chess-tui --black http://localhost:8083
+```
+
+#### One-time setup
+
+`maia3` is **not on PyPI** — it lives on GitHub and must be installed
+from source. Pick one:
+
+```bash
+# Recommended: uv tool install (puts maia3-5m, maia3-cache, etc. on PATH)
+uv tool install 'maia3 @ git+https://github.com/CSSLab/maia3.git'
+
+# Or: pip (user-site, requires PATH to include the user bin)
+pip install --user git+https://github.com/CSSLab/maia3.git
+
+# Or: clone and install locally
+git clone https://github.com/CSSLab/maia3.git
+cd maia3
+pip install .
+```
+
+Then pre-download the 5M model so the first match doesn't time out
+waiting on Hugging Face:
+
+```bash
+maia3-cache
+```
+
+Then point `engines.json` at the executable (use the absolute path if
+`maia3-5m` is not on `PATH`):
+
+```json
+{
+  "maia": { "path": "maia3-5m" }
+}
+```
+
+#### Quick presets
+
+```bash
+# Default: maia's natural distribution at the requested Elo
+uv run chess-tui-maia 8083 --elo 1500
+
+# Greedy
+uv run chess-tui-maia 8083 --elo 1500 --temperature 0
+
+# Stronger / more focused
+uv run chess-tui-maia 8083 --elo 2000 --temperature 0.6 --top-p 0.85
+
+# Asymmetric match (self plays at one Elo, opponent at another)
+uv run chess-tui-maia 8083 --elo 1500 --self-elo 1400 --oppo-elo 1800
+
+# Disable history mode (engine gets the FEN only, no move history)
+uv run chess-tui-maia 8083 --elo 1500 --no-use-history
+```
+
+#### Nova vs. Maia match
+
+Both servers speak the same RESTful protocol, so a cross-engine match is
+just two servers + the TUI pointing at both:
+
+```bash
+# Terminal 1
+uv run chess-tui-nova 8082 --elo 1400
+
+# Terminal 2
+uv run chess-tui-maia 8083 --elo 1400
+
+# Terminal 3
+uv run chess-tui --white http://localhost:8082 --black http://localhost:8083
+```
+
+Note: Nova and Maia's "1400" are not strictly the same 1400 — they were
+trained on different data and condition on Elo differently (Nova takes a
+single rating scalar; Maia splits SelfElo / OppoElo). The match is
+well-defined (both engines do their best to play like a 1400 human by
+their own lights), but the result tells you about each model's
+definition of 1400, not a single ground truth.
+
+#### Sampling knobs
+
+- `--elo` (required, `800`-`2700`): ELO applied to both sides. Overridden
+  individually by `--self-elo` / `--oppo-elo` if either is set.
+- `--self-elo` / `--oppo-elo` (optional): ELO of the side to move /
+  opponent. Default to `--elo` if unset.
+- `--temperature` (`>=0`, default `1.0`): `0` is argmax; `1.0` is maia's
+  natural distribution; values `<1` sharpen, `>1` flatten.
+- `--top-p` (`(0, 1]`, default `1.0`): nucleus sampling threshold.
+- `--multi-pv` (`[1, 20]`, default `1`): number of top candidate moves
+  maia logs per move. **Logging-only** — maia still plays one sampled
+  move, and the MultiPV list is computed from the raw softmax (T=1),
+  independent of `--temperature` / `--top-p`.
+- `--use-history` / `--no-use-history` (default on): pass the full move
+  history to maia via `--use-uci-history`. On, the engine receives the
+  last 8 board states as transformer context (matching training). Off,
+  the engine sees only the current FEN.
+
 ## Configuration
 
 Engine paths are configured in `engines.json`:
@@ -128,6 +239,9 @@ Engine paths are configured in `engines.json`:
   },
   "nova": {
     "path": "path/to/nova_v3b.onnx"
+  },
+  "maia": {
+    "path": "maia3-5m"
   }
 }
 ```

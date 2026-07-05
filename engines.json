@@ -6,5 +6,8 @@
   },
   "nova": {
     "path": "../en-croissant/mybooks/nova_v3b.onnx"
+  },
+  "maia": {
+    "path": "maia3-5m"
   }
 }
