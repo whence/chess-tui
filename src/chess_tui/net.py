@@ -111,3 +111,51 @@ def request_move(
     if not isinstance(san, str):
         raise ServerError(200, payload)
     return san
+
+
+# Generous default — observers (e.g. chess-tui-engine) may legitimately
+# take a while to "think" before responding. The TUI never awaits the
+# response, so this only caps how long a stuck observer can keep a
+# background thread alive.
+OBSERVER_TIMEOUT = 30.0
+
+
+def post_observer(
+    url: str,
+    fen: str,
+    *,
+    moves: list[str] | None = None,
+    timeout: float = OBSERVER_TIMEOUT,
+) -> None:
+    """Fire-and-forget POST to an observer. Reads and discards the response.
+
+    Observers are just regular chess-tui network player servers
+    (``chess-tui-engine``, ``chess-tui-nova``, ``chess-tui-maia``, etc.)
+    that happen to be listening. The TUI does not parse or use their
+    response — the observer will compute a move and print it on its own
+    stdout, while the TUI ignores it.
+
+    All errors are swallowed:
+
+    - ``TransportError`` (connection refused, timeout, DNS failure, etc.)
+    - ``ServerError`` (4xx / 5xx responses, including 503 busy)
+    - any other unexpected exception (e.g. malformed server reply)
+
+    The function always returns ``None``. It is intentionally synchronous
+    so callers can run it via ``loop.run_in_executor`` from async code
+    without blocking the event loop.
+    """
+    body: dict = {"fen": fen}
+    if moves is not None:
+        body["moves"] = moves
+    try:
+        _post_json(f"{url.rstrip('/')}/move", body, timeout=timeout)
+    except NetworkError:
+        # Any server- or transport-side failure is fine; the observer is
+        # best-effort. Don't surface to the caller.
+        return None
+    except Exception:
+        # Defensive: a stray bug (e.g. bad URL, JSON parse error) must
+        # never propagate up into the TUI's fire-and-forget task.
+        return None
+    return None

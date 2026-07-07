@@ -228,6 +228,52 @@ definition of 1400, not a single ground truth.
 
 ## Configuration
 
+### Observer mode (`--observer`)
+
+In addition to routing a side to a network player with `--white` / `--black`,
+you can also attach any number of **observer** servers to the TUI. After
+every move (both white and black), the TUI POSTs the current FEN and SAN
+move history to each observer, but **does not wait for or use the
+response**. Observers are best-effort and fire-and-forget — a slow
+observer never slows the game down, and an unreachable one is silently
+ignored.
+
+Observers are just regular chess-tui network player servers
+(`chess-tui-engine`, `chess-tui-nova`, `chess-tui-maia`, etc.). They
+have no idea whether they're being used as a player or an observer; they
+compute a move and print it on their own stdout. The TUI discards the
+response.
+
+```bash
+# Terminal 1: one engine
+uv run chess-tui-engine 8082 --engine plentychess --depth 20
+
+# Terminal 2: a different engine
+uv run chess-tui-nova 8083 --elo 1500
+
+# Terminal 3: a third observer
+uv run chess-tui-maia 8084 --elo 1400
+
+# Terminal 4: a local human plays white vs. stockfish, with nova + maia watching
+uv run chess-tui --black http://localhost:8082 \
+                --observer http://localhost:8083 \
+                --observer http://localhost:8084
+```
+
+You can also pass multiple URLs after a single `--observer`:
+
+```bash
+uv run chess-tui --white http://localhost:8080 \
+                --observer http://localhost:8081 http://localhost:8082 http://localhost:8083
+```
+
+Observers are notified **only after a move** — never on game start, board
+flip (`f`), or reset (`r`). They run in parallel (each POST is dispatched
+on a separate worker thread), so a single slow engine can't bottleneck the
+others.
+
+### `engines.json`
+
 Engine paths are configured in `engines.json`:
 
 ```json

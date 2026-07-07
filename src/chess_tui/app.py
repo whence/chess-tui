@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
+from functools import partial
 from typing import ClassVar
 
 import chess
@@ -275,6 +278,7 @@ class ChessApp(App):
         self,
         state: BoardState | None = None,
         players: dict[chess.Color, Player] | None = None,
+        observers: list[str] | None = None,
     ) -> None:
         super().__init__()
         self._state: BoardState = state or BoardState()
@@ -282,6 +286,10 @@ class ChessApp(App):
             chess.WHITE: LocalPlayer(color=chess.WHITE),
             chess.BLACK: LocalPlayer(color=chess.BLACK),
         }
+        # URLs of observer servers. Each one is POSTed the FEN + SAN
+        # history after every move. The TUI never reads their response.
+        # Fire-and-forget — see :meth:`_notify_observers`.
+        self._observers: list[str] = list(observers) if observers else []
         # Cursor position (display row, col)
         self._cursor: tuple[int, int] = (7, 4)  # Start at e1
         # Selected piece square (display row, col) or None
@@ -348,6 +356,62 @@ class ChessApp(App):
             exclusive=True,
             name="network-move",
         )
+
+    def _notify_observers(self) -> None:
+        """Fan out the current position to all observer URLs in parallel.
+
+        The notification is fire-and-forget:
+
+        - Each observer POST is submitted to the running loop's default
+          thread-pool executor. The TUI event loop is never blocked —
+          the actual HTTP I/O happens on a worker thread.
+        - The returned futures are not awaited; the TUI moves on
+          immediately. Pending observer POSTs complete on their own
+          threads and then exit.
+        - ``net.post_observer`` reads and discards the response, and
+          swallows all errors (timeout, 4xx/5xx, connection refused,
+          malformed reply). Observers are best-effort.
+        - All observers start in parallel (the executor schedules them
+          concurrently across its worker threads).
+        """
+        if not self._observers:
+            return
+        fen = self._state.fen()
+        moves = self._state.san_history()
+        urls = list(self._observers)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop (shouldn't happen during normal TUI life).
+            # Fall back to spawning a daemon thread per observer so we
+            # still don't block the caller.
+            import threading
+            def _thread_send(url: str) -> None:
+                try:
+                    net.post_observer(url, fen, moves=moves)
+                except Exception as exc:  # pragma: no cover - belt and suspenders
+                    print(
+                        f"[observer] {url}: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+            for url in urls:
+                threading.Thread(
+                    target=_thread_send, args=(url,), daemon=True,
+                    name=f"observer-{url}",
+                ).start()
+            return
+
+        # Fire-and-forget. ``run_in_executor`` returns a future that the
+        # event loop holds a strong reference to until the executor
+        # task completes; the caller (TUI) does not need to keep it.
+        # ``partial`` binds the keyword-only ``moves`` argument so the
+        # executor can call it positionally.
+        for url in urls:
+            loop.run_in_executor(
+                None, partial(net.post_observer, moves=moves), url, fen
+            )
 
     async def _do_network_move(self, player: NetworkPlayer) -> None:
         if self._state.is_game_over():
@@ -704,7 +768,7 @@ class ChessApp(App):
 
     # ---- actions ---------------------------------------------------------
 
-    def _commit(self, *, sound: bool = False, capture: bool = False) -> None:
+    def _commit(self, *, sound: bool = False, capture: bool = False, notify_observers: bool = True) -> None:
         if sound:
             if capture:
                 play_capture()
@@ -712,10 +776,16 @@ class ChessApp(App):
                 play_click()
         self.refresh_all()
         self._maybe_request_network_move()
+        # Observers are notified only when the game actually progresses
+        # (a move was applied), not on flip / reset / etc. See design
+        # note in the README's "Observer mode" section.
+        if notify_observers:
+            self._notify_observers()
 
     def action_flip(self) -> None:
         self._state.flip()
-        self._commit()
+        # Flip is a view-only change — observers don't get re-notified.
+        self._commit(notify_observers=False)
 
     def action_reset(self) -> None:
         self._state.reset()
@@ -723,7 +793,8 @@ class ChessApp(App):
         self._move_from_square = None
         self._move_to_square = None
         self._cursor = (7, 4)
-        self._commit()
+        # Reset is not a move — observers don't get re-notified.
+        self._commit(notify_observers=False)
 
     # ---- input handling --------------------------------------------------
 
@@ -804,7 +875,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="chess-tui",
         description="TUI chess app. Pass --white / --black to route that "
-        "side to a network player (see openapi/chess-tui-net.yaml).",
+        "side to a network player (see openapi/chess-tui-net.yaml). "
+        "Pass --observer to add one or more fire-and-forget watchers that "
+        "receive the FEN after every move but never block the game.",
     )
     parser.add_argument(
         "--white",
@@ -816,6 +889,23 @@ def main(argv: list[str] | None = None) -> None:
         "--black",
         metavar="URL",
         help="URL of a network player to use for black. Omit for a local human.",
+    )
+    parser.add_argument(
+        "--observer",
+        metavar="URL",
+        nargs="+",
+        action="append",
+        default=[],
+        help=(
+            "URL of a network observer (e.g. http://localhost:8084). "
+            "After every move the TUI POSTs the current FEN and SAN "
+            "history to each observer and does NOT wait for a response. "
+            "The observer can be any chess-tui network player server "
+            "(chess-tui-engine, chess-tui-nova, chess-tui-maia, etc.); "
+            "it will compute a move and print it on its own stdout. "
+            "Repeat the flag, or pass multiple URLs after one flag, to "
+            "register several observers; they are all notified in parallel."
+        ),
     )
     parser.add_argument(
         "-s", "--silent",
@@ -842,6 +932,16 @@ def main(argv: list[str] | None = None) -> None:
     else:
         players[chess.BLACK] = LocalPlayer(color=chess.BLACK)
 
+    # ``--observer`` uses nargs='+' action='append', so the result is
+    # a list of lists. Flatten and de-dupe while preserving order.
+    flat_observers: list[str] = []
+    seen: set[str] = set()
+    for sublist in args.observer:
+        for url in sublist:
+            if url not in seen:
+                flat_observers.append(url)
+                seen.add(url)
+
     # Create initial state from FEN if provided
     state = None
     if args.fen:
@@ -852,7 +952,11 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Error: invalid FEN: {exc}", file=sys.stderr)
             sys.exit(1)
 
-    ChessApp(state=state, players=players).run()
+    ChessApp(
+        state=state,
+        players=players,
+        observers=flat_observers,
+    ).run()
 
 
 if __name__ == "__main__":

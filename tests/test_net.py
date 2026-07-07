@@ -512,7 +512,7 @@ def test_chess_tui_cli_no_flags_uses_local_players() -> None:
     seen: list[dict[chess.Color, Player]] = []
 
     class _FakeApp:
-        def __init__(self, state=None, players=None):
+        def __init__(self, state=None, players=None, observers=None):
             seen.append(players or {})
 
         def run(self):
@@ -539,7 +539,7 @@ def test_chess_tui_cli_white_flag_routes_white_to_network() -> None:
     seen: list[dict[chess.Color, Player]] = []
 
     class _FakeApp:
-        def __init__(self, state=None, players=None):
+        def __init__(self, state=None, players=None, observers=None):
             seen.append(players or {})
 
         def run(self):
@@ -566,7 +566,7 @@ def test_chess_tui_cli_both_flags_routes_both_to_network() -> None:
     seen: list[dict[chess.Color, Player]] = []
 
     class _FakeApp:
-        def __init__(self, state=None, players=None):
+        def __init__(self, state=None, players=None, observers=None):
             seen.append(players or {})
 
         def run(self):
@@ -595,7 +595,7 @@ def test_chess_tui_cli_fen_option() -> None:
     seen_state = [None]
 
     class _FakeApp:
-        def __init__(self, state=None, players=None):
+        def __init__(self, state=None, players=None, observers=None):
             seen_state[0] = state
 
         def run(self):
@@ -687,5 +687,526 @@ async def test_tui_applies_network_move_automatically() -> None:
             "rnbqkbnr/pppppppp/8/8/4P3"
         )
     finally:
+        server.shutdown()
+        server.server_close()
+
+
+# ---- Observer mode: net.post_observer + TUI + CLI -------------------------
+
+
+def test_post_observer_returns_none_on_success() -> None:
+    """post_observer must always return None — caller never uses the SAN."""
+    def factory(_payload, _log):
+        return 200, {"san": "e4"}
+
+    with stub_server(factory) as (base, log):
+        result = net.post_observer(base, chess.Board().fen())
+
+    assert result is None
+    # The body that hit the server had the FEN.
+    assert log and "fen" in log[0]["body"]
+
+
+def test_post_observer_sends_san_history_when_provided() -> None:
+    """Observers get the SAN history so they can apply --use-history (maia)."""
+    def factory(_payload, _log):
+        return 200, {"san": "e4"}
+
+    with stub_server(factory) as (base, log):
+        net.post_observer(
+            base,
+            chess.Board().fen(),
+            moves=["e4", "e5", "Nf3"],
+        )
+
+    assert log[0]["body"]["moves"] == ["e4", "e5", "Nf3"]
+
+
+def test_post_observer_strips_trailing_slash() -> None:
+    def factory(_payload, _log):
+        return 200, {"san": "Nf3"}
+
+    with stub_server(factory) as (base, log):
+        net.post_observer(base + "/", chess.Board().fen())
+
+    assert log[0]["path"] == "/move"
+
+
+def test_post_observer_swallows_4xx_server_errors() -> None:
+    """A 4xx response (e.g. observer's own bug) must not propagate."""
+    def factory(_payload, _log):
+        return 400, {"error": "illegal move: e5"}
+
+    with stub_server(factory) as (base, _log):
+        result = net.post_observer(base, chess.Board().fen(), timeout=0.5)
+
+    assert result is None
+
+
+def test_post_observer_swallows_5xx_server_errors() -> None:
+    """A 5xx response must not propagate."""
+    def factory(_payload, _log):
+        return 500, {"error": "engine crashed"}
+
+    with stub_server(factory) as (base, _log):
+        result = net.post_observer(base, chess.Board().fen(), timeout=0.5)
+
+    assert result is None
+
+
+def test_post_observer_swallows_503_busy() -> None:
+    """The TUI never reads the SAN — 503 from a busy observer is fine."""
+    def factory(_payload, _log):
+        return 503, {"error": "server busy"}
+
+    with stub_server(factory) as (base, _log):
+        result = net.post_observer(base, chess.Board().fen(), timeout=0.5)
+
+    assert result is None
+
+
+def test_post_observer_swallows_connection_refused() -> None:
+    """No server listening — must not raise."""
+    closed_port = _free_port()
+    result = net.post_observer(
+        f"http://127.0.0.1:{closed_port}", chess.Board().fen(), timeout=0.5
+    )
+    assert result is None
+
+
+def test_post_observer_swallows_remote_disconnected() -> None:
+    """Server kills the connection mid-request — must not raise."""
+    from unittest.mock import patch
+    import http.client
+
+    def mock_urlopen(req, timeout):
+        raise http.client.RemoteDisconnected("server died")
+
+    with patch("urllib.request.urlopen", mock_urlopen):
+        result = net.post_observer(
+            "http://127.0.0.1:9999", chess.Board().fen(), timeout=0.5
+        )
+    assert result is None
+
+
+def test_post_observer_swallows_unexpected_exception() -> None:
+    """A stray bug (e.g. bad URL) must not raise — defensive catch-all."""
+    from unittest.mock import patch
+
+    def mock_urlopen(req, timeout):
+        raise RuntimeError("something is very wrong")
+
+    with patch("urllib.request.urlopen", mock_urlopen):
+        result = net.post_observer(
+            "http://127.0.0.1:9999", chess.Board().fen(), timeout=0.5
+        )
+    assert result is None
+
+
+# ---- CLI: --observer flag parsing ------------------------------------------
+
+
+def test_chess_tui_cli_observer_flag_passes_url_to_app() -> None:
+    from chess_tui.app import main
+
+    seen: list[list[str]] = []
+
+    class _FakeApp:
+        def __init__(self, state=None, players=None, observers=None):
+            seen.append(list(observers) if observers else [])
+
+        def run(self):
+            raise SystemExit(0)
+
+    import chess_tui.app as app_mod
+    real = app_mod.ChessApp
+    app_mod.ChessApp = _FakeApp
+    try:
+        with pytest.raises(SystemExit):
+            main(["--observer", "http://obs.example:8084"])
+    finally:
+        app_mod.ChessApp = real
+
+    assert seen == [["http://obs.example:8084"]]
+
+
+def test_chess_tui_cli_observer_flag_accepts_multiple_urls() -> None:
+    """A single --observer can take multiple URLs."""
+    from chess_tui.app import main
+
+    seen: list[list[str]] = []
+
+    class _FakeApp:
+        def __init__(self, state=None, players=None, observers=None):
+            seen.append(list(observers) if observers else [])
+
+        def run(self):
+            raise SystemExit(0)
+
+    import chess_tui.app as app_mod
+    real = app_mod.ChessApp
+    app_mod.ChessApp = _FakeApp
+    try:
+        with pytest.raises(SystemExit):
+            main([
+                "--observer", "http://a.example:1", "http://b.example:2",
+            ])
+    finally:
+        app_mod.ChessApp = real
+
+    assert seen == [["http://a.example:1", "http://b.example:2"]]
+
+
+def test_chess_tui_cli_observer_flag_is_repeatable() -> None:
+    """--observer can be repeated; order preserved, de-duped."""
+    from chess_tui.app import main
+
+    seen: list[list[str]] = []
+
+    class _FakeApp:
+        def __init__(self, state=None, players=None, observers=None):
+            seen.append(list(observers) if observers else [])
+
+        def run(self):
+            raise SystemExit(0)
+
+    import chess_tui.app as app_mod
+    real = app_mod.ChessApp
+    app_mod.ChessApp = _FakeApp
+    try:
+        with pytest.raises(SystemExit):
+            main([
+                "--observer", "http://a.example:1",
+                "--observer", "http://b.example:2", "http://c.example:3",
+                "--observer", "http://a.example:1",  # duplicate
+            ])
+    finally:
+        app_mod.ChessApp = real
+
+    # Order preserved, de-duped, flat.
+    assert seen == [["http://a.example:1", "http://b.example:2", "http://c.example:3"]]
+
+
+def test_chess_tui_cli_no_observer_flag_means_no_observers() -> None:
+    from chess_tui.app import main
+
+    seen: list[list[str]] = []
+
+    class _FakeApp:
+        def __init__(self, state=None, players=None, observers=None):
+            seen.append(list(observers) if observers else [])
+
+        def run(self):
+            raise SystemExit(0)
+
+    import chess_tui.app as app_mod
+    real = app_mod.ChessApp
+    app_mod.ChessApp = _FakeApp
+    try:
+        with pytest.raises(SystemExit):
+            main([])
+    finally:
+        app_mod.ChessApp = real
+
+    assert seen == [[]]
+
+
+# ---- TUI integration: observer fires after a move --------------------------
+
+
+class _ObserverHandler(BaseHTTPRequestHandler):
+    """Records every POST it receives. The TUI never reads our response."""
+
+    request_log: list[dict] = []
+    # When non-None, sleep this many seconds before responding — used to
+    # prove that the TUI does NOT wait for observers.
+    response_delay: float = 0.0
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else b"{}"
+        try:
+            payload = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            payload = {}
+        _ObserverHandler.request_log.append({"path": self.path, "body": payload})
+        if _ObserverHandler.response_delay > 0:
+            time.sleep(_ObserverHandler.response_delay)
+        data = json.dumps({"san": "ignored"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *a, **k):  # noqa: A002
+        pass
+
+
+def _start_observer_server() -> tuple[ThreadingHTTPServer, threading.Thread, int]:
+    """Reset, start, and return the observer stub server."""
+    _ObserverHandler.request_log = []
+    _ObserverHandler.response_delay = 0.0
+    port = _free_port()
+    server = ThreadingHTTPServer(("127.0.0.1", port), _ObserverHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, port
+
+
+def _stop_observer_server(server: ThreadingHTTPServer) -> None:
+    _ObserverHandler.request_log = []
+    _ObserverHandler.response_delay = 0.0
+    server.shutdown()
+    server.server_close()
+
+
+async def test_tui_fires_observer_after_move() -> None:
+    """After a local player makes a move, the TUI POSTs the new FEN + SAN
+    history to every registered observer."""
+    from chess_tui.app import ChessApp
+    from textual.widgets import Input
+
+    server, _thread, port = _start_observer_server()
+    try:
+        url = f"http://127.0.0.1:{port}"
+        app = ChessApp(observers=[url])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            inp = app.query_one("#move-input", Input)
+            inp.focus()
+            await pilot.press("e", "4", "enter")
+            await pilot.pause()
+            # Wait for the observer POST to arrive.
+            for _ in range(40):
+                await pilot.pause()
+                if _ObserverHandler.request_log:
+                    break
+                await asyncio.sleep(0.05)
+        assert len(_ObserverHandler.request_log) == 1, (
+            f"expected 1 observer POST, got {len(_ObserverHandler.request_log)}"
+        )
+        post = _ObserverHandler.request_log[0]
+        assert post["path"] == "/move"
+        # FEN reflects black-to-move after 1.e4.
+        assert post["body"]["fen"].startswith(
+            "rnbqkbnr/pppppppp/8/8/4P3"
+        ), post["body"]["fen"]
+        # SAN history includes the just-played move.
+        assert post["body"]["moves"] == ["e4"]
+    finally:
+        _stop_observer_server(server)
+
+
+async def test_tui_fires_observer_after_every_move() -> None:
+    """Observers get a POST after every move, in order, with the full SAN
+    history each time."""
+    from chess_tui.app import ChessApp
+    from textual.widgets import Input
+
+    server, _thread, port = _start_observer_server()
+    try:
+        url = f"http://127.0.0.1:{port}"
+        app = ChessApp(observers=[url])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            inp = app.query_one("#move-input", Input)
+            inp.focus()
+            for san in ("e4", "e5", "Nf3"):
+                await pilot.press(*list(san), "enter")
+                await pilot.pause()
+            # Wait for all 3 POSTs to arrive.
+            for _ in range(60):
+                await pilot.pause()
+                if len(_ObserverHandler.request_log) >= 3:
+                    break
+                await asyncio.sleep(0.05)
+        log = _ObserverHandler.request_log
+        assert len(log) == 3, f"expected 3 observer POSTs, got {len(log)}: {log}"
+        assert log[0]["body"]["moves"] == ["e4"]
+        assert log[1]["body"]["moves"] == ["e4", "e5"]
+        assert log[2]["body"]["moves"] == ["e4", "e5", "Nf3"]
+        # After 1.e4 e5 2.Nf3 it's black's turn.
+        assert log[2]["body"]["fen"].split()[1] == "b"
+    finally:
+        _stop_observer_server(server)
+
+
+async def test_tui_does_not_notify_observer_on_flip() -> None:
+    """Flipping the board is a view-only change — observers don't get a POST."""
+    from chess_tui.app import ChessApp
+    from textual.widgets import Input
+
+    server, _thread, port = _start_observer_server()
+    try:
+        url = f"http://127.0.0.1:{port}"
+        app = ChessApp(observers=[url])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            inp = app.query_one("#move-input", Input)
+            inp.focus()
+            await pilot.press("e", "4", "enter")
+            await pilot.pause()
+            # Wait for the move POST.
+            for _ in range(40):
+                await pilot.pause()
+                if _ObserverHandler.request_log:
+                    break
+                await asyncio.sleep(0.05)
+            assert len(_ObserverHandler.request_log) == 1
+            # Flip — no new POST.
+            app.action_flip()
+            for _ in range(10):
+                await pilot.pause()
+            assert len(_ObserverHandler.request_log) == 1
+            # Flip back — still no new POST.
+            app.action_flip()
+            for _ in range(10):
+                await pilot.pause()
+            assert len(_ObserverHandler.request_log) == 1
+    finally:
+        _stop_observer_server(server)
+
+
+async def test_tui_does_not_notify_observer_on_reset() -> None:
+    """Resetting the game must not re-notify observers with the start FEN."""
+    from chess_tui.app import ChessApp
+    from textual.widgets import Input
+
+    server, _thread, port = _start_observer_server()
+    try:
+        url = f"http://127.0.0.1:{port}"
+        app = ChessApp(observers=[url])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            inp = app.query_one("#move-input", Input)
+            inp.focus()
+            await pilot.press("e", "4", "enter")
+            await pilot.pause()
+            for _ in range(40):
+                await pilot.pause()
+                if _ObserverHandler.request_log:
+                    break
+                await asyncio.sleep(0.05)
+            assert len(_ObserverHandler.request_log) == 1
+            app.action_reset()
+            for _ in range(10):
+                await pilot.pause()
+            assert len(_ObserverHandler.request_log) == 1
+    finally:
+        _stop_observer_server(server)
+
+
+async def test_tui_fires_all_observers_in_parallel() -> None:
+    """Multiple observers all get a POST. We don't time the parallelism
+    (flaky), but we do verify each one receives the move."""
+    from chess_tui.app import ChessApp
+    from textual.widgets import Input
+
+    server, _thread, port = _start_observer_server()
+    try:
+        url1 = f"http://127.0.0.1:{port}"
+        app = ChessApp(observers=[url1, url1, url1])  # same stub 3x
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            inp = app.query_one("#move-input", Input)
+            inp.focus()
+            await pilot.press("e", "4", "enter")
+            await pilot.pause()
+            for _ in range(60):
+                await pilot.pause()
+                if len(_ObserverHandler.request_log) >= 3:
+                    break
+                await asyncio.sleep(0.05)
+        assert len(_ObserverHandler.request_log) == 3
+        for post in _ObserverHandler.request_log:
+            assert post["body"]["moves"] == ["e4"]
+            assert post["body"]["fen"].startswith(
+                "rnbqkbnr/pppppppp/8/8/4P3"
+            )
+    finally:
+        _stop_observer_server(server)
+
+
+async def test_tui_does_not_block_on_slow_observer() -> None:
+    """The TUI must NOT wait for a slow observer — next move goes through
+    immediately, even if the previous observer is still thinking."""
+    from chess_tui.app import ChessApp
+    from textual.widgets import Input
+
+    # Make every observer response take a long time.
+    _ObserverHandler.response_delay = 2.0
+    server, _thread, port = _start_observer_server()
+    try:
+        url = f"http://127.0.0.1:{port}"
+        app = ChessApp(observers=[url])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            inp = app.query_one("#move-input", Input)
+            inp.focus()
+            await pilot.press("e", "4", "enter")
+            await pilot.pause()
+            # The TUI should be ready to accept the next move immediately,
+            # even though the observer response is delayed 2s.
+            start = time.monotonic()
+            await pilot.press("d", "5", "enter")
+            await pilot.pause()
+            elapsed = time.monotonic() - start
+            # Should be well under the observer's 2s delay.
+            assert elapsed < 1.0, f"TUI blocked for {elapsed:.2f}s on observer"
+            # Both moves have been applied.
+            assert app._state.san_history() == ["e4", "d5"]
+    finally:
+        _stop_observer_server(server)
+
+
+async def test_tui_observer_failure_does_not_break_game() -> None:
+    """A 500 from an observer must not break the TUI — the next move
+    still goes through."""
+    from chess_tui.app import ChessApp
+    from textual.widgets import Input
+
+    def fail_factory(_payload, _log):
+        return 500, {"error": "observer crashed"}
+
+    with stub_server(fail_factory) as (url, _log):
+        app = ChessApp(observers=[url])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            inp = app.query_one("#move-input", Input)
+            inp.focus()
+            await pilot.press("e", "4", "enter")
+            await pilot.pause()
+            # Give the (failed) observer time to reply.
+            for _ in range(20):
+                await pilot.pause()
+                await asyncio.sleep(0.05)
+            # Second move still works.
+            await pilot.press("e", "5", "enter")
+            await pilot.pause()
+            assert app._state.san_history() == ["e4", "e5"]
+
+
+async def test_tui_no_observers_means_no_extra_http_traffic() -> None:
+    """Sanity: a TUI with no observers makes no POSTs after a move."""
+    from chess_tui.app import ChessApp
+    from textual.widgets import Input
+
+    server, _thread, port = _start_observer_server()
+    try:
+        url = f"http://127.0.0.1:{port}"
+        app = ChessApp()  # no observers
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            inp = app.query_one("#move-input", Input)
+            inp.focus()
+            await pilot.press("e", "4", "enter")
+            await pilot.pause()
+            for _ in range(10):
+                await pilot.pause()
+                await asyncio.sleep(0.05)
+        assert _ObserverHandler.request_log == []
+    finally:
+        _stop_observer_server(server)
         server.shutdown()
         server.server_close()
