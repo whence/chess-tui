@@ -66,7 +66,7 @@ Engine-powered server using UCI chess engines.
 
 ```bash
 # Edit engines.json to set engine paths, then:
-uv run chess-tui-engine 8081 --engine plentychess --depth 20 -v
+uv run chess-tui-engine --port 8081 --engine plentychess --depth 20 -v
 
 # Use with TUI:
 uv run chess-tui --black http://localhost:8081
@@ -282,7 +282,7 @@ response.
 
 ```bash
 # Terminal 1: one engine
-uv run chess-tui-engine 8082 --engine plentychess --depth 20
+uv run chess-tui-engine --port 8082 --engine plentychess --depth 20
 
 # Terminal 2: a different engine
 uv run chess-tui-nova 8083 --elo 1500

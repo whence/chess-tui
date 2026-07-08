@@ -303,8 +303,7 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
-        "port",
-        nargs="?",
+        "--port",
         type=int,
         default=8080,
         help="port to listen on (default: 8080)",
