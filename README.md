@@ -72,6 +72,42 @@ uv run chess-tui-engine 8081 --engine plentychess --depth 20 -v
 uv run chess-tui --black http://localhost:8081
 ```
 
+With `-v` (verbose), every `POST /move` request logs the full analysis
+in the same format as `chess-coach-v3`'s `/engine` command — board,
+engine line, and one row per principal variation with score, depth, and
+SAN moves:
+
+```
+────────────────────────────────────────
+Move 1 — White to move
+r n b q k b n r
+p p p p p p p p
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+P P P P P P P P
+R N B Q K B N R
+Thinking for 0.0s...
+  Engine: plentychess (depth 12, multipv 3)
+  FEN: rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
+
+  PVs:
+    #1  +0.51/12  e4 c5 Nf3 d6 Bb5+ Bd7 Bxd7+ Qxd7 O-O e6
+    #2  +0.26/12  Nf3 Nf6 g3 g6 c4 c5 Bg2 Bg7 Nc3 O-O O-O d5 cxd5
+    #3  +0.16/12  d4 Nf6 Nf3 e6 e3 Be7 Be2 d5 O-O O-O c3
+  Engine plays: e4
+```
+
+`--multipv N` (default 1, max 20) controls how many lines are printed
+and analyzed. The score is always from **White's perspective** — `+`
+means white is better, `-` means black is better, regardless of whose
+turn it is. The engine still plays the best (top) line either way.
+
+This is especially useful with `chess-tui --observer`: the engine's
+own terminal shows the analysis, while the TUI plays its own game
+unaffected.
+
 ### chess-tui-nova
 
 Nova neural network player. Uses per-move sampling knobs
