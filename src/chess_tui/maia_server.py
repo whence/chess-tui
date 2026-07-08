@@ -260,6 +260,14 @@ def main(argv: list[str] | None = None) -> None:
         help="port to listen on (default: 8080)",
     )
     parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help=(
+            "host/interface to bind to (default: 0.0.0.0 = all interfaces). "
+            "Use 127.0.0.1 to restrict to localhost."
+        ),
+    )
+    parser.add_argument(
         "--elo",
         type=int,
         required=True,
@@ -406,9 +414,10 @@ def main(argv: list[str] | None = None) -> None:
         use_history=args.use_history,
     )
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
+    server = ThreadingHTTPServer((args.host, args.port), handler)
+    from .host import describe_listen
     print(
-        f"chess-tui maia server listening on http://127.0.0.1:{args.port}\n"
+        f"chess-tui maia server listening on {describe_listen(args.host, args.port)}\n"
         f"  Engine: Maia3-5M (via {maia_path})\n"
         f"  Elo: self={self_elo}, oppo={oppo_elo}\n"
         f"  Temperature: {args.temperature}\n"

@@ -160,17 +160,25 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
-        "port",
-        nargs="?",
+        "--port",
         type=int,
         default=8080,
-        help="port to listen on (default 8080)",
+        help="port to listen on (default: 8080)",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help=(
+            "host/interface to bind to (default: 0.0.0.0 = all interfaces). "
+            "Use 127.0.0.1 to restrict to localhost."
+        ),
     )
     args = parser.parse_args(argv)
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), _make_handler())
+    server = ThreadingHTTPServer((args.host, args.port), _make_handler())
+    from .host import describe_listen
     print(
-        f"chess-tui network server listening on http://127.0.0.1:{args.port}\n"
+        f"chess-tui network server listening on {describe_listen(args.host, args.port)}\n"
         "  POST /move with {\"fen\": \"...\"} → {\"san\": \"...\"}\n"
         "  If client retries while you're thinking, the old prompt is\n"
         "  abandoned and a fresh prompt appears.\n"

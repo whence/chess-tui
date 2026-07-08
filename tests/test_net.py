@@ -474,8 +474,8 @@ def test_net_server_cli_default_port(monkeypatch) -> None:
 
     monkeypatch.setattr("chess_tui.net_server.ThreadingHTTPServer", fake_server)
     with pytest.raises(SystemExit):
-        net_server.main([])  # no argv → uses sys.argv default
-    assert captured["addr"] == ("127.0.0.1", 8080)
+        net_server.main([])  # no argv → uses --port default (8080)
+    assert captured["addr"] == ("0.0.0.0", 8080)
 
 
 def test_net_server_cli_custom_port(monkeypatch) -> None:
@@ -487,7 +487,21 @@ def test_net_server_cli_custom_port(monkeypatch) -> None:
 
     monkeypatch.setattr("chess_tui.net_server.ThreadingHTTPServer", fake_server)
     with pytest.raises(SystemExit):
-        net_server.main(["9999"])
+        net_server.main(["--port", "9999"])
+    assert captured["addr"] == ("0.0.0.0", 9999)
+
+
+def test_net_server_cli_custom_host(monkeypatch) -> None:
+    """--host lets the user restrict to localhost (or any other interface)."""
+    captured: dict = {}
+
+    def fake_server(addr, handler):
+        captured["addr"] = addr
+        return _FakeServer(addr[1])
+
+    monkeypatch.setattr("chess_tui.net_server.ThreadingHTTPServer", fake_server)
+    with pytest.raises(SystemExit):
+        net_server.main(["--host", "127.0.0.1", "--port", "9999"])
     assert captured["addr"] == ("127.0.0.1", 9999)
 
 
@@ -700,7 +714,7 @@ def test_post_observer_returns_none_on_success() -> None:
         return 200, {"san": "e4"}
 
     with stub_server(factory) as (base, log):
-        result = net.post_observer(base, chess.Board().fen())
+        result = net.post_observer(base, chess.Board().fen(), quiet=True)
 
     assert result is None
     # The body that hit the server had the FEN.
@@ -717,6 +731,7 @@ def test_post_observer_sends_san_history_when_provided() -> None:
             base,
             chess.Board().fen(),
             moves=["e4", "e5", "Nf3"],
+            quiet=True,
         )
 
     assert log[0]["body"]["moves"] == ["e4", "e5", "Nf3"]
@@ -727,7 +742,7 @@ def test_post_observer_strips_trailing_slash() -> None:
         return 200, {"san": "Nf3"}
 
     with stub_server(factory) as (base, log):
-        net.post_observer(base + "/", chess.Board().fen())
+        net.post_observer(base + "/", chess.Board().fen(), quiet=True)
 
     assert log[0]["path"] == "/move"
 
@@ -738,7 +753,9 @@ def test_post_observer_swallows_4xx_server_errors() -> None:
         return 400, {"error": "illegal move: e5"}
 
     with stub_server(factory) as (base, _log):
-        result = net.post_observer(base, chess.Board().fen(), timeout=0.5)
+        result = net.post_observer(
+            base, chess.Board().fen(), timeout=0.5, quiet=True
+        )
 
     assert result is None
 
@@ -749,7 +766,9 @@ def test_post_observer_swallows_5xx_server_errors() -> None:
         return 500, {"error": "engine crashed"}
 
     with stub_server(factory) as (base, _log):
-        result = net.post_observer(base, chess.Board().fen(), timeout=0.5)
+        result = net.post_observer(
+            base, chess.Board().fen(), timeout=0.5, quiet=True
+        )
 
     assert result is None
 
@@ -760,7 +779,9 @@ def test_post_observer_swallows_503_busy() -> None:
         return 503, {"error": "server busy"}
 
     with stub_server(factory) as (base, _log):
-        result = net.post_observer(base, chess.Board().fen(), timeout=0.5)
+        result = net.post_observer(
+            base, chess.Board().fen(), timeout=0.5, quiet=True
+        )
 
     assert result is None
 
@@ -769,7 +790,8 @@ def test_post_observer_swallows_connection_refused() -> None:
     """No server listening — must not raise."""
     closed_port = _free_port()
     result = net.post_observer(
-        f"http://127.0.0.1:{closed_port}", chess.Board().fen(), timeout=0.5
+        f"http://127.0.0.1:{closed_port}", chess.Board().fen(),
+        timeout=0.5, quiet=True,
     )
     assert result is None
 
@@ -784,7 +806,8 @@ def test_post_observer_swallows_remote_disconnected() -> None:
 
     with patch("urllib.request.urlopen", mock_urlopen):
         result = net.post_observer(
-            "http://127.0.0.1:9999", chess.Board().fen(), timeout=0.5
+            "http://127.0.0.1:9999", chess.Board().fen(),
+            timeout=0.5, quiet=True,
         )
     assert result is None
 
@@ -798,9 +821,49 @@ def test_post_observer_swallows_unexpected_exception() -> None:
 
     with patch("urllib.request.urlopen", mock_urlopen):
         result = net.post_observer(
-            "http://127.0.0.1:9999", chess.Board().fen(), timeout=0.5
+            "http://127.0.0.1:9999", chess.Board().fen(),
+            timeout=0.5, quiet=True,
         )
     assert result is None
+
+
+def test_post_observer_logs_to_stderr_on_failure_by_default(
+    capfd: pytest.CaptureFixture,
+) -> None:
+    """By default, a failed observer POST is logged to stderr so the
+    user can see why their observer isn't being called. (E.g. they ran
+    the engine on a remote machine but the server is still bound to
+    127.0.0.1, so the connection is refused.) The test uses
+    quiet=False implicitly by not passing it."""
+    from unittest.mock import patch
+
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        mock_urlopen.side_effect = OSError("Connection refused")
+        result = net.post_observer(
+            "http://does-not-exist:9999", chess.Board().fen(), timeout=0.5,
+        )
+    assert result is None
+    captured = capfd.readouterr()
+    assert "chess-tui observer" in captured.err
+    assert "http://does-not-exist:9999" in captured.err
+    assert "Connection refused" in captured.err
+
+
+def test_post_observer_quiet_suppresses_stderr_log(
+    capfd: pytest.CaptureFixture,
+) -> None:
+    """quiet=True silences the stderr log; useful for tests and for
+    callers that already handle errors themselves."""
+    from unittest.mock import patch
+
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        mock_urlopen.side_effect = OSError("Connection refused")
+        net.post_observer(
+            "http://does-not-exist:9999", chess.Board().fen(),
+            timeout=0.5, quiet=True,
+        )
+    captured = capfd.readouterr()
+    assert "chess-tui observer" not in captured.err
 
 
 # ---- CLI: --observer flag parsing ------------------------------------------
@@ -957,6 +1020,48 @@ def _start_observer_server() -> tuple[ThreadingHTTPServer, threading.Thread, int
 def _stop_observer_server(server: ThreadingHTTPServer) -> None:
     _ObserverHandler.request_log = []
     _ObserverHandler.response_delay = 0.0
+    server.shutdown()
+    server.server_close()
+
+
+def _start_tagged_observer_server(
+    tag: str,
+) -> tuple[ThreadingHTTPServer, threading.Thread, int, list[dict]]:
+    """Like ``_start_observer_server`` but each server has its own
+    per-tag log list, so we can verify 2+ distinct observers on
+    different ports all receive the POST.
+
+    The returned ``log`` is appended to on every incoming POST.
+    """
+    log: list[dict] = []
+
+    class _TaggedHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                payload = {}
+            log.append({"path": self.path, "body": payload, "tag": tag})
+            data = json.dumps({"san": "ignored"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a, **k):  # noqa: A002
+            pass
+
+    port = _free_port()
+    server = ThreadingHTTPServer(("127.0.0.1", port), _TaggedHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, port, log
+
+
+def _stop_tagged_observer_server(server: ThreadingHTTPServer) -> None:
     server.shutdown()
     server.server_close()
 
@@ -1126,6 +1231,51 @@ async def test_tui_fires_all_observers_in_parallel() -> None:
             )
     finally:
         _stop_observer_server(server)
+
+
+async def test_tui_fires_both_observers_when_passed_via_single_flag() -> None:
+    """Regression: when two observers are passed as ``--observer A B``,
+    BOTH must receive the POST. (Earlier the user reported only the
+    second one being called; the actual cause was the remote observer
+    being bound to 127.0.0.1, but this test makes sure the in-process
+    fan-out is correct.)"""
+    from chess_tui.app import ChessApp
+    from textual.widgets import Input
+
+    server1, _t1, port1, log1 = _start_tagged_observer_server("OBS1")
+    server2, _t2, port2, log2 = _start_tagged_observer_server("OBS2")
+    try:
+        url1 = f"http://127.0.0.1:{port1}"
+        url2 = f"http://127.0.0.1:{port2}"
+        # Same pattern as ``--observer URL1 URL2`` after de-dup.
+        app = ChessApp(observers=[url1, url2])
+        assert app._observers == [url1, url2]
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            inp = app.query_one("#move-input", Input)
+            inp.focus()
+            await pilot.press("e", "4", "enter")
+            await pilot.pause()
+            for _ in range(40):
+                await pilot.pause()
+                if log1 and log2:
+                    break
+                await asyncio.sleep(0.05)
+        # Both observers must have received the POST.
+        assert len(log1) == 1, f"OBS1 log: {log1!r}"
+        assert len(log2) == 1, f"OBS2 log: {log2!r}"
+        assert log1[0]["tag"] == "OBS1"
+        assert log2[0]["tag"] == "OBS2"
+        # Both POSTs have the same FEN+SAN history (the post-move state).
+        assert log1[0]["body"]["moves"] == ["e4"]
+        assert log2[0]["body"]["moves"] == ["e4"]
+        assert log1[0]["body"]["fen"].startswith(
+            "rnbqkbnr/pppppppp/8/8/4P3"
+        )
+        assert log2[0]["body"]["fen"] == log1[0]["body"]["fen"]
+    finally:
+        _stop_tagged_observer_server(server1)
+        _stop_tagged_observer_server(server2)
 
 
 async def test_tui_does_not_block_on_slow_observer() -> None:

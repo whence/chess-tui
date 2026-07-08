@@ -309,6 +309,14 @@ def main(argv: list[str] | None = None) -> None:
         help="port to listen on (default: 8080)",
     )
     parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help=(
+            "host/interface to bind to (default: 0.0.0.0 = all interfaces). "
+            "Use 127.0.0.1 to restrict to localhost."
+        ),
+    )
+    parser.add_argument(
         "-e", "--engine-name",
         default=default_engine_name,
         choices=available_engines,
@@ -432,9 +440,10 @@ def main(argv: list[str] | None = None) -> None:
         engine_name=engine_name,
     )
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
+    server = ThreadingHTTPServer((args.host, args.port), handler)
+    from .host import describe_listen
     print(
-        f"chess-tui engine server listening on http://127.0.0.1:{args.port}\n"
+        f"chess-tui engine server listening on {describe_listen(args.host, args.port)}\n"
         f"  Engine: {engine_name} ({os.path.basename(engine_path)})\n"
         f"  Limit: {limit_desc}\n"
         f"  Multipv: {args.multipv}\n"

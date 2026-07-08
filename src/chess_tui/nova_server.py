@@ -338,6 +338,14 @@ def main(argv: list[str] | None = None) -> None:
         help="port to listen on (default: 8080)",
     )
     parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help=(
+            "host/interface to bind to (default: 0.0.0.0 = all interfaces). "
+            "Use 127.0.0.1 to restrict to localhost."
+        ),
+    )
+    parser.add_argument(
         "--elo",
         type=int,
         required=True,
@@ -444,9 +452,10 @@ def main(argv: list[str] | None = None) -> None:
         blunder_rate=args.blunder_rate,
     )
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
+    server = ThreadingHTTPServer((args.host, args.port), handler)
+    from .host import describe_listen
     print(
-        f"chess-tui nova server listening on http://127.0.0.1:{args.port}\n"
+        f"chess-tui nova server listening on {describe_listen(args.host, args.port)}\n"
         f"  Model: Nova\n"
         f"  ELO: {args.elo}\n"
         f"  Temperature: {args.temperature}\n"

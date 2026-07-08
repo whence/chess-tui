@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import sys
 import urllib.error
 import urllib.request
 from typing import Any
@@ -126,6 +127,7 @@ def post_observer(
     *,
     moves: list[str] | None = None,
     timeout: float = OBSERVER_TIMEOUT,
+    quiet: bool = False,
 ) -> None:
     """Fire-and-forget POST to an observer. Reads and discards the response.
 
@@ -141,6 +143,11 @@ def post_observer(
     - ``ServerError`` (4xx / 5xx responses, including 503 busy)
     - any other unexpected exception (e.g. malformed server reply)
 
+    By default, failures are logged to stderr as a one-liner so silent
+    network errors (e.g. an observer bound to ``127.0.0.1`` on a remote
+    machine that can't be reached) are visible. Set ``quiet=True`` to
+    suppress the log (used by tests, and by callers that prefer silence).
+
     The function always returns ``None``. It is intentionally synchronous
     so callers can run it via ``loop.run_in_executor`` from async code
     without blocking the event loop.
@@ -150,12 +157,20 @@ def post_observer(
         body["moves"] = moves
     try:
         _post_json(f"{url.rstrip('/')}/move", body, timeout=timeout)
-    except NetworkError:
-        # Any server- or transport-side failure is fine; the observer is
-        # best-effort. Don't surface to the caller.
+    except NetworkError as exc:
+        if not quiet:
+            print(
+                f"[chess-tui observer] {url}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
         return None
-    except Exception:
-        # Defensive: a stray bug (e.g. bad URL, JSON parse error) must
-        # never propagate up into the TUI's fire-and-forget task.
+    except Exception as exc:
+        if not quiet:
+            print(
+                f"[chess-tui observer] {url}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
         return None
     return None

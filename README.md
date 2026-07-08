@@ -52,7 +52,7 @@ Controls:
 Network player server (plays moves over HTTP).
 
 ```bash
-uv run chess-tui-net 8080
+uv run chess-tui-net --port 8080
 ```
 
 Then in another terminal:
@@ -263,6 +263,36 @@ definition of 1400, not a single ground truth.
   the engine sees only the current FEN.
 
 ## Configuration
+
+### Network play
+
+All four servers (`chess-tui-net`, `chess-tui-engine`, `chess-tui-nova`,
+`chess-tui-maia`) bind to `0.0.0.0` by default — i.e. **all network
+interfaces** — so a TUI on a different machine can reach them over
+LAN/internet. The startup banner shows both the bound URL and the
+discovered LAN address:
+
+```
+chess-tui engine server listening on http://0.0.0.0:8080 (all interfaces; LAN: http://192.168.1.42:8080)
+```
+
+To restrict to localhost (e.g. you're on a public network and don't want
+to expose the server), pass `--host 127.0.0.1`:
+
+```bash
+uv run chess-tui-engine --port 8080 --engine plentychess --host 127.0.0.1
+```
+
+When a TUI's observer POST fails (e.g. an observer on a remote machine
+is still bound to localhost), the failure is logged to **stderr** as a
+single line:
+
+```
+[chess-tui observer] http://192.168.1.99:8084: could not reach http://192.168.1.99:8084/move: [Errno 61] Connection refused
+```
+
+This makes "the first observer isn't being called" bugs visible: the
+silent connection failure now appears in the TUI's terminal.
 
 ### Observer mode (`--observer`)
 
