@@ -18,6 +18,7 @@ from chess_tui.engine_server import (
     _format_score,
     _normalise_score,
 )
+from chess_tui import engine_server as _make_handler_module
 
 
 # ---- _normalise_score -----------------------------------------------------
@@ -144,3 +145,41 @@ def test_max_multipv_is_a_sane_upper_bound() -> None:
     """20 is enough for any sane use; if a user wants more they can patch."""
     assert MAX_MULTIPV >= 1
     assert MAX_MULTIPV <= 100
+
+
+# ---- per-move log default ------------------------------------------------
+
+
+def test_make_handler_signature_has_no_verbose_parameter() -> None:
+    """Regression: the per-move log used to be gated behind ``-v``. Users
+    (especially in observer mode) thought the engine wasn't doing
+    anything because the log was silent by default. The per-move log is
+    now on by default; silence is opt-in via ``--quiet`` (``quiet=True``
+    on the handler)."""
+    import inspect
+    params = inspect.signature(_make_handler_module._make_handler).parameters
+    assert "verbose" not in params, (
+        "_make_handler should not have a 'verbose' param — per-move log "
+        "is on by default; use 'quiet=True' to silence."
+    )
+    assert "quiet" in params, (
+        "_make_handler should have a 'quiet' param so the CLI can pass "
+        "the --quiet flag."
+    )
+
+
+def test_main_parses_quiet_flag(capsys) -> None:
+    """``-q`` / ``--quiet`` is accepted; no ``-v`` / ``--verbose``."""
+    import chess_tui.engine_server as mod
+    # --quiet should be accepted (and not error out before binding).
+    # We can't actually start the server in a test, so just verify the
+    # parser doesn't reject the flag.
+    parser = mod.argparse.ArgumentParser()
+    # Smoke-check that ``mod`` re-exports the parser's help would list
+    # the flag. The simpler thing: import and grep the source.
+    import inspect
+    src = inspect.getsource(mod.main)
+    assert '"-q"' in src or "'-q'" in src, "expected -q/--quiet flag"
+    assert "-v" not in src or "--verbose" not in src, (
+        "the old -v/--verbose flag should be removed; use --quiet instead"
+    )

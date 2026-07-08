@@ -66,16 +66,16 @@ Engine-powered server using UCI chess engines.
 
 ```bash
 # Edit engines.json to set engine paths, then:
-uv run chess-tui-engine --port 8081 --engine plentychess --depth 20 -v
+uv run chess-tui-engine --port 8081 --engine plentychess --depth 20 --multipv 5
 
 # Use with TUI:
 uv run chess-tui --black http://localhost:8081
 ```
 
-With `-v` (verbose), every `POST /move` request logs the full analysis
-in the same format as `chess-coach-v3`'s `/engine` command — board,
-engine line, and one row per principal variation with score, depth, and
-SAN moves:
+By default (no flag needed), every `POST /move` request logs the full
+analysis in the same format as `chess-coach-v3`'s `/engine` command —
+board, engine line, and one row per principal variation with score,
+depth, and SAN moves:
 
 ```
 ────────────────────────────────────────
@@ -103,6 +103,10 @@ Thinking for 0.0s...
 and analyzed. The score is always from **White's perspective** — `+`
 means white is better, `-` means black is better, regardless of whose
 turn it is. The engine still plays the best (top) line either way.
+
+Pass `--quiet` (`-q`) to silence the per-move log entirely (useful for
+background processes / log-file redirection). The engine still picks
+the best move; only stdout is silenced.
 
 This is especially useful with `chess-tui --observer`: the engine's
 own terminal shows the analysis, while the TUI plays its own game

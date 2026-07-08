@@ -115,10 +115,15 @@ def _make_handler(
     min_wait: float,
     max_wait: float,
     multipv: int,
-    verbose: bool,
     engine_name: str,
+    quiet: bool,
 ) -> type[BaseHTTPRequestHandler]:
-    """Create a request handler with the given engine configuration."""
+    """Create a request handler with the given engine configuration.
+
+    Per-move analysis is logged to stdout by default (matching
+    ``chess-tui-nova`` and ``chess-tui-maia``). Pass ``quiet=True`` to
+    silence — useful for background processes / log-file redirection.
+    """
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802 — http.server convention
@@ -151,7 +156,7 @@ def _make_handler(
                 self._send_json(400, {"error": f"game over: {result}"})
                 return
 
-            if verbose:
+            if not quiet:
                 side = "White" if board.turn else "Black"
                 move_num = board.fullmove_number
                 print(f"\n{'─' * 40}", flush=True)
@@ -170,7 +175,7 @@ def _make_handler(
 
             # Simulate thinking time
             wait_time = random.uniform(min_wait, max_wait)
-            if verbose:
+            if not quiet:
                 print(f"Thinking for {wait_time:.1f}s...", flush=True)
             time.sleep(wait_time)
 
@@ -186,7 +191,7 @@ def _make_handler(
 
             san = board.san(move)
 
-            if verbose:
+            if not quiet:
                 limit_desc = (
                     f"time {time_limit}s" if time_limit
                     else f"{nodes} nodes" if nodes
@@ -359,9 +364,14 @@ def main(argv: list[str] | None = None) -> None:
         help="maximum thinking time in seconds (default: 3.0)",
     )
     parser.add_argument(
-        "-v", "--verbose",
+        "-q", "--quiet",
         action="store_true",
-        help="print position, thinking info, and per-move engine analysis (PVs + scores) to stdout",
+        help=(
+            "suppress the per-move analysis log (position, thinking time, "
+            "PVs with scores, and the chosen move). The engine still plays "
+            "the best move; only the stdout log is silenced. Useful for "
+            "background processes or when redirecting the log to a file."
+        ),
     )
     parser.add_argument(
         "--multipv",
@@ -369,9 +379,9 @@ def main(argv: list[str] | None = None) -> None:
         default=1,
         help=(
             f"number of principal variations to log per move (1-{MAX_MULTIPV}, "
-            f"default: 1). With -v/--verbose, the per-move log lists this many "
-            f"lines (each with its score, depth, and SAN moves). The engine "
-            f"still plays the best one regardless."
+            f"default: 1). The per-move log lists this many lines (each with "
+            f"its score, depth, and SAN moves). The engine still plays the "
+            f"best one regardless."
         ),
     )
     args = parser.parse_args(argv)
@@ -436,8 +446,8 @@ def main(argv: list[str] | None = None) -> None:
         min_wait=args.min_wait,
         max_wait=args.max_wait,
         multipv=args.multipv,
-        verbose=args.verbose,
         engine_name=engine_name,
+        quiet=args.quiet,
     )
 
     server = ThreadingHTTPServer((args.host, args.port), handler)
