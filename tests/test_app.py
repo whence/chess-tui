@@ -496,3 +496,142 @@ async def test_opening_populates_san_history_for_network_players() -> None:
     # state that gets passed to network players still has the history.
     app = ChessApp(state=state, opening=opening)
     assert app._state.san_history() == history
+
+
+# ---- ad-hoc observer re-fire ('o' keybinding) -------------------------------
+
+
+async def test_o_key_fires_notify_observers_with_current_state(
+    monkeypatch,
+) -> None:
+    """Pressing ``o`` should call :meth:`_notify_observers` so every
+    ``--observer`` URL gets the current FEN + SAN history, exactly
+    the same payload the per-move path sends.
+
+    We intercept at the post_observer level (the lowest common
+    sink) so the test pins the wire contract, not the call chain.
+    """
+    from chess_tui import app as app_mod
+    from chess_tui.state import BoardState
+
+    captured: list[dict] = []
+
+    def fake_post(url, fen, *, moves=None, timeout=..., quiet=False):
+        captured.append({"url": url, "fen": fen, "moves": moves})
+
+    monkeypatch.setattr(app_mod.net, "post_observer", fake_post)
+
+    state = BoardState.from_pgn("1. e4 e5")
+    observers = ["http://localhost:8084", "http://localhost:8085"]
+    app = ChessApp(state=state, observers=observers)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # No notifications yet — the TUI hasn't progressed and we
+        # haven't pressed ``o``.
+        assert captured == []
+        await pilot.press("o")
+        await pilot.pause()
+
+    # Both observers got the same payload, in parallel via the
+    # executor.  Order isn't guaranteed, so compare as sets.
+    assert len(captured) == 2
+    urls_sent = {c["url"] for c in captured}
+    assert urls_sent == set(observers)
+    # And every payload carries the right FEN + history.
+    for payload in captured:
+        assert payload["fen"] == state.fen()
+        assert payload["moves"] == ["e4", "e5"]
+
+
+async def test_o_key_does_not_modify_game_state(monkeypatch) -> None:
+    """Pressing ``o`` is purely a notification trigger: it must not
+    apply a move, change the turn, mutate the SAN history, or steal
+    focus from the move list."""
+    from chess_tui import app as app_mod
+    monkeypatch.setattr(
+        app_mod.net, "post_observer", lambda *a, **kw: None
+    )
+
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        before_fen = app._state.fen()
+        before_turn = app._state.turn()
+        before_history = app._state.san_history()
+        # Focus is on the move list at startup (per the default
+        # ``on_mount`` behavior); pressing ``o`` must not change it.
+        before_focus = app.focused
+        await pilot.press("o")
+        await pilot.pause()
+        assert app._state.fen() == before_fen
+        assert app._state.turn() == before_turn
+        assert app._state.san_history() == before_history
+        assert app.focused is before_focus
+
+
+async def test_o_key_with_no_observers_shows_status_and_does_not_error() -> None:
+    """If the TUI was started without ``--observer``, pressing ``o``
+    is a no-op for the network but the user must still get feedback
+    (otherwise the key feels broken)."""
+    from chess_tui import app as _app
+    sent: list = []
+    original = _app.net.post_observer
+    _app.net.post_observer = lambda *a, **kw: sent.append(a)
+    try:
+        async with run_app() as (app, pilot):
+            await pilot.pause()
+            # Sanity: no observers were configured.
+            assert app._observers == []
+            await pilot.press("o")
+            await pilot.pause()
+            # No network call, but the status line explains why.
+            assert sent == []
+            assert "no observer" in status_text(app).lower()
+    finally:
+        _app.net.post_observer = original
+
+
+async def test_o_key_fires_in_addition_to_per_move_notifications(
+    monkeypatch,
+) -> None:
+    """The per-move path already calls :meth:`_notify_observers`
+    after every real move.  Pressing ``o`` should fire it *again*
+    for the same position (i.e. manual trigger is additive, not a
+    replacement)."""
+    from chess_tui import app as app_mod
+
+    captured: list[dict] = []
+
+    def fake_post(url, fen, *, moves=None, timeout=..., quiet=False):
+        captured.append({"url": url, "fen": fen, "moves": moves})
+
+    monkeypatch.setattr(app_mod.net, "post_observer", fake_post)
+    observers = ["http://localhost:8084"]
+
+    app = ChessApp(observers=observers)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Initial per-move notifications: none yet.
+        assert captured == []
+        # Apply a real move — should fire automatically.
+        app._state.apply_san("e4")
+        app._commit(notify_observers=True)
+        await pilot.pause()
+        n_after_move = len(captured)
+        assert n_after_move == 1
+        # Now press 'o' — should fire AGAIN for the same position.
+        await pilot.press("o")
+        await pilot.pause()
+        assert len(captured) == n_after_move + 1
+        # Both payloads carried the same FEN and the same single-move
+        # history.  Pressing 'o' doesn't add to the history.
+        for payload in captured:
+            assert payload["moves"] == ["e4"]
+
+
+async def test_o_binding_exists_in_app_bindings() -> None:
+    """Sanity: the 'o' key is bound to ``adhoc_observer`` and shown
+    in the help bar (the binding is what makes the key discoverable)."""
+    from textual.binding import Binding
+    o_bindings = [b for b in ChessApp.BINDINGS if b.key == "o"]
+    assert o_bindings, "no 'o' binding registered"
+    assert o_bindings[0].action == "adhoc_observer"

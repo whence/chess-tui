@@ -46,6 +46,7 @@ Controls:
 - Escape: cancel selection
 - `f`: flip board
 - `r`: reset game
+- `o`: re-fire every `--observer` URL with the current position (manual trigger, in addition to the automatic per-move notification)
 - `q`: quit
 
 Flags:
@@ -361,6 +362,19 @@ Observers are notified **only after a move** — never on game start, board
 flip (`f`), or reset (`r`). They run in parallel (each POST is dispatched
 on a separate worker thread), so a single slow engine can't bottleneck the
 others.
+
+#### Manual observer re-fire (`o` key)
+
+To get the engine's take on the *current* position without playing a
+move, press `o` to manually re-fire the same notification that the
+per-move path would send. Useful when you've been thinking for a
+while and want a fresh analysis snapshot, or when an observer was
+briefly down and you want to catch it up. The payload is identical
+to the automatic path (current FEN + SAN history), and all
+configured `--observer` URLs are notified in parallel.
+
+If the TUI was started without `--observer`, pressing `o` shows a
+status hint rather than failing silently.
 
 ### `engines.json`
 

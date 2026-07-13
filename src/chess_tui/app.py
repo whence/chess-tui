@@ -276,6 +276,7 @@ class ChessApp(App):
         Binding("escape", "cancel_selection", "Cancel", show=False, priority=True),
         Binding("f", "flip", "Flip board"),
         Binding("r", "reset", "Reset"),
+        Binding("o", "adhoc_observer", "Observe"),
         Binding("q", "quit", "Quit"),
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
@@ -335,7 +336,8 @@ class ChessApp(App):
                 yield ListView(id="promotion-selector")
         yield TextLine(
             "↑↓←→: navigate • Space: select/place • "
-            "Enter: confirm • Esc: cancel • f: flip • r: reset • q: quit",
+            "Enter: confirm • Esc: cancel • f: flip • r: reset • "
+            "o: observe • q: quit",
             id="help-bar",
         )
 
@@ -560,6 +562,30 @@ class ChessApp(App):
             return inp.has_focus
         except Exception:
             return False
+
+    def action_adhoc_observer(self) -> None:
+        """Re-fire every ``--observer`` URL with the current position.
+
+        The per-move observer path already calls
+        :meth:`_notify_observers` after each real move.  This action
+        is the manual equivalent: the user can press ``o`` at any
+        point to send the same fire-and-forget POST (current FEN +
+        SAN history) to every configured observer, e.g. to ask the
+        engine "what do you think of *this* position?" without
+        playing a move.
+
+        Same payload format as the per-move path, so observers can't
+        tell the difference.
+        """
+        if not self._observers:
+            self._set_status(
+                "Observe: no observers configured (start with --observer)"
+            )
+            return
+        self._notify_observers()
+        self._set_status(
+            f"Observe: notified {len(self._observers)} observer(s)"
+        )
 
     def _is_local_turn(self) -> bool:
         """Check if it's a local player's turn to move."""
