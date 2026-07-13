@@ -1,0 +1,11 @@
+Opening data sourced from the `lichess-org/chess-openings` dataset
+(https://github.com/lichess-org/chess-openings).
+
+Licensed under CC0 1.0 Universal (Public Domain Dedication).
+https://creativecommons.org/publicdomain/zero/1.0/
+
+"Opening data is in a.tsv, b.tsv, c.tsv, d.tsv, and e.tsv, with the
+filenames corresponding to ECO volumes."
+
+Columns bundled here: eco, name, pgn
+(epd and uci columns are computed at load time by chess_tui.openings.)

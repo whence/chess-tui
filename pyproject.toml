@@ -29,6 +29,8 @@ include = [
     "src/chess_tui/*.py",
     "src/chess_tui/*.wav",
     "src/chess_tui/pieces/*.png",
+    "src/chess_tui/data/*.tsv",
+    "src/chess_tui/data/*.txt",
     "THIRD_PARTY_NOTICES.txt",
     "openapi/*.yaml",
 ]

@@ -14,7 +14,7 @@ import pytest
 from chess_tui.app import Cell, ChessApp, FileBar, RankBar, TextLine
 from chess_tui.state import BoardState
 from chess_tui.themes import THEME
-from textual.widgets import Input, ListView
+from textual.widgets import Input, Label, ListView
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -422,3 +422,380 @@ async def test_default_theme_is_checkered() -> None:
         assert (r, g, b) == (int(dark[0:2], 16), int(dark[2:4], 16), int(dark[4:6], 16)), (
             f"expected #{dark}, got rgb({r}, {g}, {b})"
         )
+
+
+# ---- --opening integration --------------------------------------------------
+
+
+async def test_opening_kwarg_sets_title_and_state() -> None:
+    """Passing an Opening to ChessApp should set the board position
+    and show the opening name + ECO in the title bar."""
+    from chess_tui.openings import find
+    # ``resolve("B90")`` is now ambiguous; we want the B90 root.
+    opening = find("B90")[0]
+    state = BoardState(board=opening.to_board())
+    app = ChessApp(state=state, opening=opening)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Title includes the opening name and ECO.
+        title = title_text(app)
+        assert opening.name in title
+        assert opening.eco in title
+        # And the board is actually at the opening's position, not the
+        # initial one.  Verify via the FEN stored in state.
+        assert app._state.fen() == opening.to_fen()
+
+
+async def test_no_opening_means_default_title() -> None:
+    """No opening kwarg → title should be the plain ``Chess TUI — ...``."""
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        assert app._opening is None
+        assert "Najdorf" not in title_text(app)
+        assert "(B" not in title_text(app)
+
+
+async def test_opening_used_as_starting_position_for_moves() -> None:
+    """After starting from Najdorf, the legal move list should contain
+    the moves natural to that position (e.g. white's knight on d4 has
+    many options), and the SAN history should be empty until we play."""
+    from chess_tui.openings import find
+    opening = find("B90")[0]
+    state = BoardState(board=opening.to_board())
+    app = ChessApp(state=state, opening=opening)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # No moves played yet.
+        assert app._state.san_history() == []
+        # White is to move (the Najdorf PGN ends with black's a6).
+        assert app._state.turn() == chess.WHITE
+
+
+async def test_opening_populates_san_history_for_network_players() -> None:
+    """Maia-3's --use-history feature (and any other history-aware
+    network player) needs the SAN history to be populated when the
+    game starts from an opening, otherwise it receives
+    ``{"fen": <opening FEN>, "moves": []}`` and silently falls back to
+    no-context mode.
+
+    We verify that ``BoardState.from_pgn(opening.pgn)`` (the path used
+    by ``--opening``) populates the SAN stack the same way
+    ``apply_move`` would.
+    """
+    from chess_tui.openings import find
+    # ``resolve("B90")`` is now ambiguous (15 B90 entries), so we
+    # use ``find`` and pick the parent (the B90 root).  This is the
+    # same row the old exact-ECO branch of resolve() returned.
+    opening = find("B90")[0]
+    # Replay the opening through BoardState — same call as main().
+    state = BoardState.from_pgn(opening.pgn)
+    history = state.san_history()
+    # The B90 canonical line is the 5 Najdorf moves (10 plies).
+    assert history == [
+        "e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "a6",
+    ]
+    # And the position is the opening's FEN, not the standard start.
+    assert state.fen() == opening.to_fen()
+    # Now construct the app the same way main() does, and verify the
+    # state that gets passed to network players still has the history.
+    app = ChessApp(state=state, opening=opening)
+    assert app._state.san_history() == history
+
+
+# ---- ad-hoc observer re-fire ('o' keybinding) -------------------------------
+
+
+async def test_o_key_fires_notify_observers_with_current_state(
+    monkeypatch,
+) -> None:
+    """Pressing ``o`` should call :meth:`_notify_observers` so every
+    ``--observer`` URL gets the current FEN + SAN history, exactly
+    the same payload the per-move path sends.
+
+    We intercept at the post_observer level (the lowest common
+    sink) so the test pins the wire contract, not the call chain.
+    """
+    from chess_tui import app as app_mod
+    from chess_tui.state import BoardState
+
+    captured: list[dict] = []
+
+    def fake_post(url, fen, *, moves=None, timeout=..., quiet=False):
+        captured.append({"url": url, "fen": fen, "moves": moves})
+
+    monkeypatch.setattr(app_mod.net, "post_observer", fake_post)
+
+    state = BoardState.from_pgn("1. e4 e5")
+    observers = ["http://localhost:8084", "http://localhost:8085"]
+    app = ChessApp(state=state, observers=observers)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # No notifications yet — the TUI hasn't progressed and we
+        # haven't pressed ``o``.
+        assert captured == []
+        await pilot.press("o")
+        await pilot.pause()
+
+    # Both observers got the same payload, in parallel via the
+    # executor.  Order isn't guaranteed, so compare as sets.
+    assert len(captured) == 2
+    urls_sent = {c["url"] for c in captured}
+    assert urls_sent == set(observers)
+    # And every payload carries the right FEN + history.
+    for payload in captured:
+        assert payload["fen"] == state.fen()
+        assert payload["moves"] == ["e4", "e5"]
+
+
+async def test_o_key_does_not_modify_game_state(monkeypatch) -> None:
+    """Pressing ``o`` is purely a notification trigger: it must not
+    apply a move, change the turn, mutate the SAN history, or steal
+    focus from the move list."""
+    from chess_tui import app as app_mod
+    monkeypatch.setattr(
+        app_mod.net, "post_observer", lambda *a, **kw: None
+    )
+
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        before_fen = app._state.fen()
+        before_turn = app._state.turn()
+        before_history = app._state.san_history()
+        # Focus is on the move list at startup (per the default
+        # ``on_mount`` behavior); pressing ``o`` must not change it.
+        before_focus = app.focused
+        await pilot.press("o")
+        await pilot.pause()
+        assert app._state.fen() == before_fen
+        assert app._state.turn() == before_turn
+        assert app._state.san_history() == before_history
+        assert app.focused is before_focus
+
+
+async def test_o_key_with_no_observers_shows_status_and_does_not_error() -> None:
+    """If the TUI was started without ``--observer``, pressing ``o``
+    is a no-op for the network but the user must still get feedback
+    (otherwise the key feels broken)."""
+    from chess_tui import app as _app
+    sent: list = []
+    original = _app.net.post_observer
+    _app.net.post_observer = lambda *a, **kw: sent.append(a)
+    try:
+        async with run_app() as (app, pilot):
+            await pilot.pause()
+            # Sanity: no observers were configured.
+            assert app._observers == []
+            await pilot.press("o")
+            await pilot.pause()
+            # No network call, but the status line explains why.
+            assert sent == []
+            assert "no observer" in status_text(app).lower()
+    finally:
+        _app.net.post_observer = original
+
+
+async def test_o_key_fires_in_addition_to_per_move_notifications(
+    monkeypatch,
+) -> None:
+    """The per-move path already calls :meth:`_notify_observers`
+    after every real move.  Pressing ``o`` should fire it *again*
+    for the same position (i.e. manual trigger is additive, not a
+    replacement)."""
+    from chess_tui import app as app_mod
+
+    captured: list[dict] = []
+
+    def fake_post(url, fen, *, moves=None, timeout=..., quiet=False):
+        captured.append({"url": url, "fen": fen, "moves": moves})
+
+    monkeypatch.setattr(app_mod.net, "post_observer", fake_post)
+    observers = ["http://localhost:8084"]
+
+    app = ChessApp(observers=observers)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Initial per-move notifications: none yet.
+        assert captured == []
+        # Apply a real move — should fire automatically.
+        app._state.apply_san("e4")
+        app._commit(notify_observers=True)
+        await pilot.pause()
+        n_after_move = len(captured)
+        assert n_after_move == 1
+        # Now press 'o' — should fire AGAIN for the same position.
+        await pilot.press("o")
+        await pilot.pause()
+        assert len(captured) == n_after_move + 1
+        # Both payloads carried the same FEN and the same single-move
+        # history.  Pressing 'o' doesn't add to the history.
+        for payload in captured:
+            assert payload["moves"] == ["e4"]
+
+
+async def test_o_binding_exists_in_app_bindings() -> None:
+    """Sanity: the 'o' key is bound to ``adhoc_observer`` and shown
+    in the help bar (the binding is what makes the key discoverable)."""
+    from textual.binding import Binding
+    o_bindings = [b for b in ChessApp.BINDINGS if b.key == "o"]
+    assert o_bindings, "no 'o' binding registered"
+    assert o_bindings[0].action == "adhoc_observer"
+
+
+# ---- opening selector (ModalScreen) ----------------------------------------
+
+
+async def test_opening_selector_pops_on_mount_with_choices() -> None:
+    """When the app is constructed with ``opening_choices``, the
+    selector modal should be the active screen after mount."""
+    from chess_tui.openings import find
+
+    choices = find("Bongcloud")  # 1 match — degenerate but valid
+    app = ChessApp(opening_choices=choices)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # The active screen should be a modal selector.  The base
+        # ChessApp screen is still mounted underneath, so we look at
+        # the top of the screen stack.
+        from textual.screen import ModalScreen
+        from chess_tui.app import OpeningSelectorScreen
+        top = app.screen
+        assert isinstance(top, OpeningSelectorScreen)
+        # And it has exactly 1 ListItem (Bongcloud).
+        lv = app.screen.query_one("#opening-selector-list")
+        assert len(lv.children) == 1
+
+
+async def test_opening_selector_enter_picks_first_row_and_applies_state() -> None:
+    """Pressing Enter on the top row should dismiss the modal and
+    apply the chosen opening's PGN to the state.  We verify via the
+    FEN — the startpos should be replaced."""
+    from chess_tui.openings import find
+
+    # Use 2+ distinct English Attack variants so we can also check
+    # navigation in another test.  Here we just want to verify that
+    # selecting applies state.
+    choices = find("Bongcloud")
+    app = ChessApp(opening_choices=choices)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # The modal is the top screen.
+        assert app.screen.__class__.__name__ == "OpeningSelectorScreen"
+        # The default row (index 0) is pre-selected.
+        await pilot.press("enter")
+        await pilot.pause()
+        # Modal is gone.
+        assert app.screen.__class__.__name__ != "OpeningSelectorScreen"
+        # The state is now the Bongcloud position, not the startpos.
+        # Bongcloud Attack = 1. e4 e5 2. Ke2.  So White played 1. e4,
+        # 2. Ke2 (yes, really — that's the whole point of Bongcloud).
+        fen = app._state.fen()
+        assert fen != chess.STARTING_FEN
+        # And the SAN history is populated (needed for network
+        # players that use --use-history).
+        history = app._state.san_history()
+        assert history == ["e4", "e5", "Ke2"]
+        # The opening attribute is set so the title bar shows it.
+        assert app._opening is not None
+        assert app._opening.eco == "C20"
+
+
+async def test_opening_selector_arrow_keys_navigate_then_enter_picks() -> None:
+    """Down-arrow should move the highlight, Enter should pick the
+    highlighted row."""
+    from chess_tui.openings import find
+
+    # Two distinct, named "Italian Game" entries that both share the
+    # C50 ECO.  Substring 'Italian Game' has many; filter to first 2
+    # for a deterministic test.
+    choices = find("Italian Game")[:2]
+    assert len(choices) >= 2, "test needs at least 2 candidates"
+
+    app = ChessApp(opening_choices=choices)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from chess_tui.app import OpeningSelectorScreen
+        modal = app.screen
+        assert isinstance(modal, OpeningSelectorScreen)
+
+        # Start at index 0; press down to go to index 1.
+        lv = app.screen.query_one("#opening-selector-list")
+        assert lv.index == 0
+        await pilot.press("down")
+        await pilot.pause()
+        assert lv.index == 1
+
+        # Press Enter — the second choice should be applied.
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app._opening is not None
+        assert app._opening.eco == choices[1].eco
+        # The resulting FEN must match the chosen opening.
+        assert app._state.fen() == choices[1].to_fen()
+
+
+async def test_opening_selector_escape_cancels_and_exits() -> None:
+    """Escape should dismiss the modal with None, and the app
+    should exit (per the spec, cancelling the selector means
+    "don't play any of these, quit")."""
+    from chess_tui.openings import find
+
+    choices = find("Italian Game")[:2]
+    app = ChessApp(opening_choices=choices)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from chess_tui.app import OpeningSelectorScreen
+        assert isinstance(app.screen, OpeningSelectorScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        # The TUI exited; app.is_running should be False.  Reaching
+        # this point without an exception is the success criterion.
+        assert not app.is_running
+
+
+async def test_opening_selector_shows_transposition_diff() -> None:
+    """When the candidates include transposition duplicates (rows
+    with the same ECO + name but different PGNs), the selector
+    should label them with the divergent-move suffix, not just the
+    name.  We verify by reading the rendered list rows."""
+    from chess_tui.app import OpeningSelectorScreen
+    from chess_tui.openings import find
+
+    # B90 English Attack has 5 transposition duplicates.
+    matches = find("Najdorf Variation, English Attack")
+    # Filter to just the (eco, name) cluster (excluding the
+    # Anti-English variant, which has a distinct name).
+    cluster = [
+        o
+        for o in matches
+        if o.name == "Sicilian Defense: Najdorf Variation, English Attack"
+    ]
+    assert len(cluster) >= 2, "test premise: need transposition siblings"
+
+    app = ChessApp(opening_choices=cluster)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, OpeningSelectorScreen)
+        lv = app.screen.query_one("#opening-selector-list")
+        # Read the labels of all rows.  The parent row should be
+        # labeled "(parent)" and the divergent rows should start
+        # with the arrow.
+        labels = []
+        for item in lv.children:
+            label_widget = item.query_one(Label)
+            # Label extends Static; the constructor stores its
+            # content in a name-mangled ``__content`` attribute
+            # (accessible as ``_Static__content``).  The public
+            # ``renderable`` property on Static returns a Rich
+            # ``Visual`` object, not the original string, so we
+            # reach into the mangled attribute to read the text we
+            # passed in.
+            text = getattr(
+                label_widget, "_Static__content", str(label_widget)
+            )
+            labels.append(str(text))
+        # The parent label appears exactly once.
+        assert sum("(" in l and "parent" in l for l in labels) == 1
+        # And at least one row has the arrow diff.
+        assert any("\u2192" in l for l in labels)

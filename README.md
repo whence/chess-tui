@@ -18,6 +18,7 @@ There are already great terminal chess apps out there:
 4. **Move/capture sounds** — Different sounds for regular moves and captures.
 5. **Promotion selector** — Visual picker when pawn reaches the last rank.
 6. **FEN support** — Start from any position with `--fen`.
+7. **Named openings** — Start from a named opening with `--opening` (e.g. `--opening B90` or `--opening "Sicilian Defense: Najdorf Variation"`). The opening's moves are replayed so the SAN history is populated — this means history-aware network players like `chess-tui-maia --use-history` get the opening positions as transformer context. The opening name and ECO code are shown in the title bar. Browse the bundled catalog with `--list-openings` (optionally filter by substring). If the query matches more than one row, an interactive selector pops up before the board mounts (arrow keys + Enter to pick, Esc to cancel). Sourced from the [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings) dataset (CC0).
 7. **Python/Textual** — Easy to extend, modify, and contribute to.
 
 ## Setup
@@ -45,7 +46,39 @@ Controls:
 - Escape: cancel selection
 - `f`: flip board
 - `r`: reset game
+- `o`: re-fire every `--observer` URL with the current position (manual trigger, in addition to the automatic per-move notification)
 - `q`: quit
+
+Flags:
+- `--fen FEN` — start from a specific position.
+- `--opening NAME` — start from a named opening. Accepts an ECO code
+  (e.g. `B90`), a full name (e.g. `Sicilian Defense: Bowdler
+  Attack`), or a case-insensitive substring. Mutually exclusive
+  with `--fen`. The opening's name and ECO are shown in the title bar.
+  Any query that matches more than one row triggers an interactive
+  selector before the board mounts: pick with the arrow keys and
+  Enter, or Escape to cancel and quit. This applies uniformly — even
+  an exact ECO like `--opening B90` (15 entries in the B90 family)
+  and an exact name like `--opening "Sicilian Defense: Najdorf
+  Variation, English Attack"` (5 transposition duplicates) show the
+  selector so the user can pick the specific line they want. The
+  only fast path is a query that matches exactly one entry
+  (e.g. `--opening Bongcloud Attack`), which resolves silently.
+  Transposition duplicates (rows with the same ECO *and* name) are
+  listed with a move-diff column that omits the common prefix and
+  shows only the divergent tail, e.g. `→ e5 Nb3 Be6 f3`.
+- `--list-openings [SUBSTRING]` — print every bundled opening whose
+  name or ECO matches `SUBSTRING` (default: list all ~3,800) and exit.
+  Useful for discovering the exact name to feed into `--opening`.
+
+Examples:
+```bash
+# Start from the Sicilian Najdorf.
+uv run chess-tui --opening B90
+
+# Browse the catalog interactively.
+uv run chess-tui --list-openings najdorf
+```
 
 ### chess-tui-net
 
@@ -341,6 +374,19 @@ Observers are notified **only after a move** — never on game start, board
 flip (`f`), or reset (`r`). They run in parallel (each POST is dispatched
 on a separate worker thread), so a single slow engine can't bottleneck the
 others.
+
+#### Manual observer re-fire (`o` key)
+
+To get the engine's take on the *current* position without playing a
+move, press `o` to manually re-fire the same notification that the
+per-move path would send. Useful when you've been thinking for a
+while and want a fresh analysis snapshot, or when an observer was
+briefly down and you want to catch it up. The payload is identical
+to the automatic path (current FEN + SAN history), and all
+configured `--observer` URLs are notified in parallel.
+
+If the TUI was started without `--observer`, pressing `o` shows a
+status hint rather than failing silently.
 
 ### `engines.json`
 

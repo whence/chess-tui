@@ -11,10 +11,18 @@ import chess
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Horizontal, ScrollableContainer, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import Input, Label, ListItem, ListView, Static
 from textual_image.widget import AutoImage
 
 from . import net
+from .openings import (
+    AmbiguousOpeningQuery,
+    Opening,
+    UnknownOpening,
+    move_suffixes,
+    resolve as resolve_opening,
+)
 from .pieces import glyph, render_piece
 from .sound import play_click, play_capture
 from .player import LocalPlayer, NetworkPlayer, Player
@@ -193,6 +201,118 @@ class FileBar(Static):
         self.update("".join(parts))
 
 
+class OpeningSelectorScreen(ModalScreen[Opening | None]):
+    """Interactive picker for an ambiguous ``--opening`` query.
+
+    Shown when the user's query (e.g. ``"najdorf"``) matches more than
+    one row in the catalog.  The user navigates with the arrow keys
+    and confirms with Enter; Escape dismisses with ``None``, which the
+    caller treats as "user cancelled" (the TUI exits).
+
+    Each row shows the ECO, the name, and — for transposition
+    duplicates (rows with the same ECO *and* name but different move
+    orders) — a short suffix of the divergent moves.  The suffix is
+    computed by :func:`move_suffixes`, which finds the common prefix
+    within the group and prints only the post-prefix tail.  Rows that
+    don't share their (eco, name) with a sibling get a ply count
+    instead.
+    """
+
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("escape", "dismiss(None)", "Cancel", show=False),
+        # The App-level bindings set ``priority=True`` so up/down
+        # always move the board cursor.  We need to override that
+        # here so the ListView's own cursor handling works when the
+        # modal is active.  priority=True on a screen binding
+        # outranks priority=True on an app binding, so the
+        # ListView gets the key.
+        Binding("up", "selector_up", "Up", show=False, priority=True),
+        Binding("down", "selector_down", "Down", show=False, priority=True),
+    ]
+
+    DEFAULT_CSS: ClassVar[str] = """
+    OpeningSelectorScreen {
+        align: center middle;
+    }
+    """
+
+    def __init__(self, choices: list[Opening], query: str) -> None:
+        super().__init__()
+        self._choices = list(choices)
+        self._query = query
+        self._suffixes = move_suffixes(self._choices)
+
+    def compose(self) -> ComposeResult:
+        items: list[ListItem] = []
+        for i, opening in enumerate(self._choices):
+            row = self._format_row(opening, self._suffixes[i])
+            items.append(ListItem(Label(row), id=f"opening-choice-{i}"))
+        with Vertical(id="opening-selector"):
+            yield Static(
+                f"Multiple openings match {self._query!r} \u2014 "
+                "choose one (\u2191\u2193 to move, Enter to select, "
+                "Esc to cancel)",
+                id="opening-selector-title",
+            )
+            yield ListView(*items, id="opening-selector-list")
+            yield Static(
+                f"{len(self._choices)} match"
+                f"{'es' if len(self._choices) != 1 else ''}",
+                id="opening-selector-hint",
+            )
+
+    @staticmethod
+    def _format_row(o: Opening, suffix: str) -> str:
+        # Pad ECO to 3 chars and name to a fixed width so the diff
+        # column lines up.  Names in the dataset can be 70+ chars; we
+        # truncate at 60 and add an ellipsis.  The diff column gets
+        # the remaining space.
+        eco = f"{o.eco:<3}"
+        name = o.name
+        if len(name) > 60:
+            name = name[:57] + "..."
+        return f"{eco}  {name:<60}  {suffix}"
+
+    def on_mount(self) -> None:
+        # Focus the list and pre-select the first row so Enter
+        # immediately confirms the top hit (most common case).
+        try:
+            lv = self.query_one("#opening-selector-list", ListView)
+            lv.index = 0
+            lv.focus()
+        except Exception:
+            pass
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        idx = event.list_view.index
+        if idx is None:
+            return
+        if 0 <= idx < len(self._choices):
+            self.dismiss(self._choices[idx])
+
+    def action_selector_up(self) -> None:
+        """Move the selector highlight up.
+
+        Forwards to the ListView's built-in cursor action.  Exists
+        so the modal can override the App-level ``up`` binding
+        (which has ``priority=True`` to keep board-cursor navigation
+        working from any focused widget).
+        """
+        try:
+            lv = self.query_one("#opening-selector-list", ListView)
+            lv.action_cursor_up()
+        except Exception:
+            pass
+
+    def action_selector_down(self) -> None:
+        """Move the selector highlight down.  See :meth:`action_selector_up`."""
+        try:
+            lv = self.query_one("#opening-selector-list", ListView)
+            lv.action_cursor_down()
+        except Exception:
+            pass
+
+
 class ChessApp(App):
     """Main TUI application."""
 
@@ -258,6 +378,30 @@ class ChessApp(App):
         dock: bottom;
         color: $text-muted;
     }
+    #opening-selector {
+        align: center middle;
+        background: $panel;
+        border: thick $accent;
+        padding: 1 2;
+        width: 90%;
+        max-width: 120;
+        height: auto;
+    }
+    #opening-selector-title {
+        content-align: center middle;
+        text-style: bold;
+        padding: 0 0 1 0;
+    }
+    #opening-selector-list {
+        height: auto;
+        max-height: 20;
+        border: round $primary;
+    }
+    #opening-selector-hint {
+        content-align: center middle;
+        color: $text-muted;
+        padding: 1 0 0 0;
+    }
     """
 
     BINDINGS: ClassVar[list[Binding]] = [
@@ -270,6 +414,7 @@ class ChessApp(App):
         Binding("escape", "cancel_selection", "Cancel", show=False, priority=True),
         Binding("f", "flip", "Flip board"),
         Binding("r", "reset", "Reset"),
+        Binding("o", "adhoc_observer", "Observe"),
         Binding("q", "quit", "Quit"),
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
@@ -279,6 +424,8 @@ class ChessApp(App):
         state: BoardState | None = None,
         players: dict[chess.Color, Player] | None = None,
         observers: list[str] | None = None,
+        opening: Opening | None = None,
+        opening_choices: list[Opening] | None = None,
     ) -> None:
         super().__init__()
         self._state: BoardState = state or BoardState()
@@ -290,6 +437,17 @@ class ChessApp(App):
         # history after every move. The TUI never reads their response.
         # Fire-and-forget — see :meth:`_notify_observers`.
         self._observers: list[str] = list(observers) if observers else []
+        # If the user started from a named opening, keep it around so
+        # the title bar can label the position.  Never affects move
+        # logic — purely cosmetic.
+        self._opening: Opening | None = opening
+        # If set, the TUI starts with an interactive selector
+        # prompting the user to pick one of these candidates.  Used
+        # when the CLI's ``--opening`` query matched more than one
+        # row.  Resolved on mount; see :meth:`on_mount`.
+        self._opening_choices: list[Opening] | None = (
+            list(opening_choices) if opening_choices else None
+        )
         # Cursor position (display row, col)
         self._cursor: tuple[int, int] = (7, 4)  # Start at e1
         # Selected piece square (display row, col) or None
@@ -324,11 +482,24 @@ class ChessApp(App):
                 yield ListView(id="promotion-selector")
         yield TextLine(
             "↑↓←→: navigate • Space: select/place • "
-            "Enter: confirm • Esc: cancel • f: flip • r: reset • q: quit",
+            "Enter: confirm • Esc: cancel • f: flip • r: reset • "
+            "o: observe • q: quit",
             id="help-bar",
         )
 
     def on_mount(self) -> None:
+        # If the CLI handed us a disambiguation menu, push it before
+        # focusing the board.  The user picks one (or cancels) and
+        # :meth:`_on_opening_chosen` runs.
+        if self._opening_choices is not None:
+            choices = self._opening_choices
+            query = getattr(self, "_opening_query", "<query>")
+            self._opening_choices = None
+            self.push_screen(
+                OpeningSelectorScreen(choices, query),
+                self._on_opening_chosen,
+            )
+            return
         self.refresh_all()
         # Default focus + first-item highlight on the move list so Enter
         # immediately picks the alphabetically-first legal move, falling
@@ -341,6 +512,43 @@ class ChessApp(App):
         except Exception:
             pass
         # Trigger network move on mount if it's network player's turn
+        self.call_later(self._maybe_request_network_move)
+
+    def _on_opening_chosen(
+        self, chosen: Opening | None
+    ) -> None:
+        """Callback for :class:`OpeningSelectorScreen`.
+
+        On selection: replay the chosen opening's PGN through a fresh
+        :class:`BoardState` and re-render.  This is the same code path
+        as :func:`main` uses for the unambiguous case, so the SAN
+        history is populated for network players that need it.
+
+        On cancel (``None``): the TUI exits.  We don't drop back to a
+        no-opening startpos because the user explicitly chose not to
+        play any of the candidates, so continuing with the startpos
+        would be silently ignoring their intent.
+        """
+        if chosen is None:
+            self.exit()
+            return
+        self._opening = chosen
+        self._state = BoardState.from_pgn(chosen.pgn)
+        # Reset the move-history highlights so the previous empty
+        # board's "no last move" state doesn't bleed into the
+        # selected position.
+        self._move_from_square = None
+        self._move_to_square = None
+        self.refresh_all()
+        try:
+            move_list = self.query_one("#move-list", ListView)
+            if move_list.children:
+                move_list.index = 0
+            move_list.focus()
+        except Exception:
+            pass
+        # If the chosen opening leaves a network player to move, kick
+        # off the request — same as the cold-mount path.
         self.call_later(self._maybe_request_network_move)
 
     # ---- rendering -------------------------------------------------------
@@ -453,13 +661,21 @@ class ChessApp(App):
 
     def _refresh_title(self) -> None:
         title = self.query_one("#title", TextLine)
+        # When the user picked a named opening, prefix the title with
+        # it so the starting position is always identifiable.  ECO code
+        # follows in parens for quick reference.
+        prefix = (
+            f"Chess TUI — {self._opening.name} ({self._opening.eco}) — "
+            if self._opening is not None
+            else "Chess TUI — "
+        )
         if self._state.is_game_over():
-            title.set_text(f"Chess TUI — Game over: {self._state.result()}")
+            title.set_text(f"{prefix}Game over: {self._state.result()}")
             title.styles.background = "#5a5a5a"
             title.styles.color = "white"
         else:
             suffix = " (check)" if self._state.is_check() else ""
-            title.set_text(f"Chess TUI — {self._state.turn_name()} to move{suffix}")
+            title.set_text(f"{prefix}{self._state.turn_name()} to move{suffix}")
             if self._state.turn() == chess.WHITE:
                 title.styles.background = "white"
                 title.styles.color = "black"
@@ -542,6 +758,30 @@ class ChessApp(App):
         except Exception:
             return False
 
+    def action_adhoc_observer(self) -> None:
+        """Re-fire every ``--observer`` URL with the current position.
+
+        The per-move observer path already calls
+        :meth:`_notify_observers` after each real move.  This action
+        is the manual equivalent: the user can press ``o`` at any
+        point to send the same fire-and-forget POST (current FEN +
+        SAN history) to every configured observer, e.g. to ask the
+        engine "what do you think of *this* position?" without
+        playing a move.
+
+        Same payload format as the per-move path, so observers can't
+        tell the difference.
+        """
+        if not self._observers:
+            self._set_status(
+                "Observe: no observers configured (start with --observer)"
+            )
+            return
+        self._notify_observers()
+        self._set_status(
+            f"Observe: notified {len(self._observers)} observer(s)"
+        )
+
     def _is_local_turn(self) -> bool:
         """Check if it's a local player's turn to move."""
         if self._state.is_game_over():
@@ -550,6 +790,13 @@ class ChessApp(App):
         return isinstance(player, LocalPlayer)
 
     def action_cursor_up(self) -> None:
+        # If a modal selector is active, the App's ``priority=True``
+        # binding for ``up`` fires before the modal's.  Forward the
+        # key to the modal instead of moving the board cursor so the
+        # user can navigate the selector with the arrow keys.
+        if isinstance(self.screen, OpeningSelectorScreen):
+            self.screen.action_selector_up()
+            return
         if self._input_has_focus() or not self._is_local_turn():
             return
         row, col = self._cursor
@@ -558,6 +805,11 @@ class ChessApp(App):
             self.refresh_all()
 
     def action_cursor_down(self) -> None:
+        # See :meth:`action_cursor_up` for the modal-forwarding
+        # rationale.
+        if isinstance(self.screen, OpeningSelectorScreen):
+            self.screen.action_selector_down()
+            return
         if self._input_has_focus() or not self._is_local_turn():
             return
         row, col = self._cursor
@@ -649,6 +901,12 @@ class ChessApp(App):
 
     def action_cancel_selection(self) -> None:
         """Escape: cancel current selection."""
+        # The App's ``priority=True`` binding for ``escape`` fires
+        # before the modal's.  Forward to the modal so escape closes
+        # the selector instead of clearing an empty board selection.
+        if isinstance(self.screen, OpeningSelectorScreen):
+            self.screen.dismiss(None)
+            return
         if self._input_has_focus() or not self._is_local_turn():
             return  # Let input handle escape
         if self._selected is not None:
@@ -917,10 +1175,54 @@ def main(argv: list[str] | None = None) -> None:
         metavar="FEN",
         help="starting FEN position",
     )
+    parser.add_argument(
+        "--opening",
+        metavar="NAME",
+        help=(
+            "start from a named opening (ECO code, e.g. ``B90``; full "
+            "name, e.g. ``Sicilian Defense: Najdorf Variation``; or a "
+            "case-insensitive substring). Mutually exclusive with --fen. "
+            "If the query matches more than one row, an interactive "
+            "selector pops up before the board mounts; pick with the "
+            "arrow keys and Enter (Esc to cancel and quit)."
+        ),
+    )
+    parser.add_argument(
+        "--list-openings",
+        metavar="SUBSTRING",
+        nargs="?",
+        const="",
+        help=(
+            "print all bundled openings whose name or ECO matches "
+            "SUBSTRING (default: list everything) and exit. Useful as "
+            "a discovery tool for ``--opening``."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.silent:
         sound.SILENT = True
+
+    # --list-openings is a discovery helper: print and exit before
+    # touching any other state.
+    if args.list_openings is not None:
+        from . import openings as _openings
+        if args.list_openings == "":
+            # No substring → enumerate the full catalog.
+            matches = list(_openings.load_all())
+        else:
+            matches = _openings.find(args.list_openings)
+        for o in matches:
+            print(f"{o.eco}  {o.name}")
+        print(f"({len(matches)} opening(s))", file=sys.stderr)
+        return
+
+    if args.fen and args.opening:
+        print(
+            "Error: --fen and --opening are mutually exclusive",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     players: dict[chess.Color, Player] = {}
     if args.white:
@@ -942,8 +1244,10 @@ def main(argv: list[str] | None = None) -> None:
                 flat_observers.append(url)
                 seen.add(url)
 
-    # Create initial state from FEN if provided
-    state = None
+    # Create initial state from FEN or from a resolved opening.
+    state: BoardState | None = None
+    starting_opening: Opening | None = None
+    opening_choices: list[Opening] | None = None
     if args.fen:
         try:
             board = chess.Board(args.fen)
@@ -951,12 +1255,53 @@ def main(argv: list[str] | None = None) -> None:
         except ValueError as exc:
             print(f"Error: invalid FEN: {exc}", file=sys.stderr)
             sys.exit(1)
+    elif args.opening:
+        try:
+            starting_opening = resolve_opening(args.opening)
+        except UnknownOpening as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except AmbiguousOpeningQuery as exc:
+            # Multiple substring matches: don't exit, hand the list
+            # to the TUI which will pop up an interactive selector.
+            # The user picks one (or cancels, which exits the app).
+            starting_opening = None
+            opening_choices = list(exc.matches)
+            state = None
+        else:
+            # Replay the opening's canonical PGN through BoardState
+            # (not just construct from its resulting board) so the SAN
+            # history is populated.  Network players like Maia-3 with
+            # ``--use-history`` rely on the move list to feed the
+            # transformer's position history.
+            try:
+                state = BoardState.from_pgn(starting_opening.pgn)
+            except ValueError as exc:
+                print(
+                    f"Error: could not replay opening "
+                    f"{args.opening!r}: {exc}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
 
-    ChessApp(
+    app = ChessApp(
         state=state,
         players=players,
         observers=flat_observers,
-    ).run()
+        opening=starting_opening,
+    )
+    if opening_choices is not None:
+        # Stash the original query so the modal can label itself.
+        # ``_opening_query`` is read by ``on_mount`` and consumed
+        # there.
+        app._opening_query = args.opening  # type: ignore[attr-defined]
+        # ``opening_choices`` is a private constructor param; passing
+        # it after construction would need another constructor
+        # variant, but for the single call site the cleanest approach
+        # is to set it on the instance directly.  We've already
+        # passed ``opening=None`` above.
+        app._opening_choices = opening_choices  # type: ignore[attr-defined]
+    app.run()
 
 
 if __name__ == "__main__":
