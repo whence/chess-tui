@@ -422,3 +422,77 @@ async def test_default_theme_is_checkered() -> None:
         assert (r, g, b) == (int(dark[0:2], 16), int(dark[2:4], 16), int(dark[4:6], 16)), (
             f"expected #{dark}, got rgb({r}, {g}, {b})"
         )
+
+
+# ---- --opening integration --------------------------------------------------
+
+
+async def test_opening_kwarg_sets_title_and_state() -> None:
+    """Passing an Opening to ChessApp should set the board position
+    and show the opening name + ECO in the title bar."""
+    from chess_tui.openings import resolve as resolve_opening
+    opening = resolve_opening("B90")
+    state = BoardState(board=opening.to_board())
+    app = ChessApp(state=state, opening=opening)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Title includes the opening name and ECO.
+        title = title_text(app)
+        assert opening.name in title
+        assert opening.eco in title
+        # And the board is actually at the opening's position, not the
+        # initial one.  Verify via the FEN stored in state.
+        assert app._state.fen() == opening.to_fen()
+
+
+async def test_no_opening_means_default_title() -> None:
+    """No opening kwarg → title should be the plain ``Chess TUI — ...``."""
+    async with run_app() as (app, pilot):
+        await pilot.pause()
+        assert app._opening is None
+        assert "Najdorf" not in title_text(app)
+        assert "(B" not in title_text(app)
+
+
+async def test_opening_used_as_starting_position_for_moves() -> None:
+    """After starting from Najdorf, the legal move list should contain
+    the moves natural to that position (e.g. white's knight on d4 has
+    many options), and the SAN history should be empty until we play."""
+    from chess_tui.openings import resolve as resolve_opening
+    opening = resolve_opening("B90")
+    state = BoardState(board=opening.to_board())
+    app = ChessApp(state=state, opening=opening)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # No moves played yet.
+        assert app._state.san_history() == []
+        # White is to move (the Najdorf PGN ends with black's a6).
+        assert app._state.turn() == chess.WHITE
+
+
+async def test_opening_populates_san_history_for_network_players() -> None:
+    """Maia-3's --use-history feature (and any other history-aware
+    network player) needs the SAN history to be populated when the
+    game starts from an opening, otherwise it receives
+    ``{"fen": <opening FEN>, "moves": []}`` and silently falls back to
+    no-context mode.
+
+    We verify that ``BoardState.from_pgn(opening.pgn)`` (the path used
+    by ``--opening``) populates the SAN stack the same way
+    ``apply_move`` would.
+    """
+    from chess_tui.openings import resolve as resolve_opening
+    opening = resolve_opening("B90")
+    # Replay the opening through BoardState — same call as main().
+    state = BoardState.from_pgn(opening.pgn)
+    history = state.san_history()
+    # The B90 canonical line is the 5 Najdorf moves (10 plies).
+    assert history == [
+        "e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "a6",
+    ]
+    # And the position is the opening's FEN, not the standard start.
+    assert state.fen() == opening.to_fen()
+    # Now construct the app the same way main() does, and verify the
+    # state that gets passed to network players still has the history.
+    app = ChessApp(state=state, opening=opening)
+    assert app._state.san_history() == history

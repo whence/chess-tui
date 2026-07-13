@@ -18,6 +18,7 @@ There are already great terminal chess apps out there:
 4. **Move/capture sounds** — Different sounds for regular moves and captures.
 5. **Promotion selector** — Visual picker when pawn reaches the last rank.
 6. **FEN support** — Start from any position with `--fen`.
+7. **Named openings** — Start from a named opening with `--opening` (e.g. `--opening B90` or `--opening "Sicilian Defense: Najdorf Variation"`). The opening's moves are replayed so the SAN history is populated — this means history-aware network players like `chess-tui-maia --use-history` get the opening positions as transformer context. The opening name and ECO code are shown in the title bar. Browse the bundled catalog with `--list-openings` (optionally filter by substring). Sourced from the [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings) dataset (CC0).
 7. **Python/Textual** — Easy to extend, modify, and contribute to.
 
 ## Setup
@@ -46,6 +47,25 @@ Controls:
 - `f`: flip board
 - `r`: reset game
 - `q`: quit
+
+Flags:
+- `--fen FEN` — start from a specific position.
+- `--opening NAME` — start from a named opening. Accepts an ECO code
+  (e.g. `B90`), a full name (e.g. `Sicilian Defense: Najdorf
+  Variation`), or a case-insensitive substring. Mutually exclusive
+  with `--fen`. The opening's name and ECO are shown in the title bar.
+- `--list-openings [SUBSTRING]` — print every bundled opening whose
+  name or ECO matches `SUBSTRING` (default: list all ~3,800) and exit.
+  Useful for discovering the exact name to feed into `--opening`.
+
+Examples:
+```bash
+# Start from the Sicilian Najdorf.
+uv run chess-tui --opening B90
+
+# Browse the catalog interactively.
+uv run chess-tui --list-openings najdorf
+```
 
 ### chess-tui-net
 

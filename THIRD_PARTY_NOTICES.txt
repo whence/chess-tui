@@ -38,3 +38,19 @@ The Cburnett set is itself a derivative of an SVG originally released by
 Cburnett under GFDL/CC BY-SA. Both the GFDL and the CC BY-SA 3.0 terms
 require that derivative works (including this project) preserve the
 attribution above and the license notices.
+
+---------------------------------------------------------------------
+2. Chess opening catalog (src/chess_tui/data/{a,b,c,d,e}.tsv)
+---------------------------------------------------------------------
+
+Source: https://github.com/lichess-org/chess-openings
+License: Creative Commons CC0 1.0 Universal (Public Domain Dedication)
+         https://creativecommons.org/publicdomain/zero/1.0/
+
+The bundled TSV files are the upstream `a.tsv` through `e.tsv`,
+distributed under CC0. As a collection of chess facts (ECO codes,
+opening names, canonical PGN move sequences) the data is in the public
+domain. Columns bundled: eco, name, pgn. The `uci` and `epd` columns
+that the upstream `dist/` artifact includes are computed at load time
+in `src/chess_tui/openings.py` to keep the bundled data identical to
+the source repository.

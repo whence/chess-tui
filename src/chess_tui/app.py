@@ -15,6 +15,12 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 from textual_image.widget import AutoImage
 
 from . import net
+from .openings import (
+    AmbiguousOpeningQuery,
+    Opening,
+    UnknownOpening,
+    resolve as resolve_opening,
+)
 from .pieces import glyph, render_piece
 from .sound import play_click, play_capture
 from .player import LocalPlayer, NetworkPlayer, Player
@@ -279,6 +285,7 @@ class ChessApp(App):
         state: BoardState | None = None,
         players: dict[chess.Color, Player] | None = None,
         observers: list[str] | None = None,
+        opening: Opening | None = None,
     ) -> None:
         super().__init__()
         self._state: BoardState = state or BoardState()
@@ -290,6 +297,10 @@ class ChessApp(App):
         # history after every move. The TUI never reads their response.
         # Fire-and-forget — see :meth:`_notify_observers`.
         self._observers: list[str] = list(observers) if observers else []
+        # If the user started from a named opening, keep it around so
+        # the title bar can label the position.  Never affects move
+        # logic — purely cosmetic.
+        self._opening: Opening | None = opening
         # Cursor position (display row, col)
         self._cursor: tuple[int, int] = (7, 4)  # Start at e1
         # Selected piece square (display row, col) or None
@@ -453,13 +464,21 @@ class ChessApp(App):
 
     def _refresh_title(self) -> None:
         title = self.query_one("#title", TextLine)
+        # When the user picked a named opening, prefix the title with
+        # it so the starting position is always identifiable.  ECO code
+        # follows in parens for quick reference.
+        prefix = (
+            f"Chess TUI — {self._opening.name} ({self._opening.eco}) — "
+            if self._opening is not None
+            else "Chess TUI — "
+        )
         if self._state.is_game_over():
-            title.set_text(f"Chess TUI — Game over: {self._state.result()}")
+            title.set_text(f"{prefix}Game over: {self._state.result()}")
             title.styles.background = "#5a5a5a"
             title.styles.color = "white"
         else:
             suffix = " (check)" if self._state.is_check() else ""
-            title.set_text(f"Chess TUI — {self._state.turn_name()} to move{suffix}")
+            title.set_text(f"{prefix}{self._state.turn_name()} to move{suffix}")
             if self._state.turn() == chess.WHITE:
                 title.styles.background = "white"
                 title.styles.color = "black"
@@ -917,10 +936,51 @@ def main(argv: list[str] | None = None) -> None:
         metavar="FEN",
         help="starting FEN position",
     )
+    parser.add_argument(
+        "--opening",
+        metavar="NAME",
+        help=(
+            "start from a named opening (ECO code, e.g. ``B90``; full "
+            "name, e.g. ``Sicilian Defense: Najdorf Variation``; or a "
+            "case-insensitive substring). Mutually exclusive with --fen."
+        ),
+    )
+    parser.add_argument(
+        "--list-openings",
+        metavar="SUBSTRING",
+        nargs="?",
+        const="",
+        help=(
+            "print all bundled openings whose name or ECO matches "
+            "SUBSTRING (default: list everything) and exit. Useful as "
+            "a discovery tool for ``--opening``."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.silent:
         sound.SILENT = True
+
+    # --list-openings is a discovery helper: print and exit before
+    # touching any other state.
+    if args.list_openings is not None:
+        from . import openings as _openings
+        if args.list_openings == "":
+            # No substring → enumerate the full catalog.
+            matches = list(_openings.load_all())
+        else:
+            matches = _openings.find(args.list_openings)
+        for o in matches:
+            print(f"{o.eco}  {o.name}")
+        print(f"({len(matches)} opening(s))", file=sys.stderr)
+        return
+
+    if args.fen and args.opening:
+        print(
+            "Error: --fen and --opening are mutually exclusive",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     players: dict[chess.Color, Player] = {}
     if args.white:
@@ -942,8 +1002,9 @@ def main(argv: list[str] | None = None) -> None:
                 flat_observers.append(url)
                 seen.add(url)
 
-    # Create initial state from FEN if provided
-    state = None
+    # Create initial state from FEN or from a resolved opening.
+    state: BoardState | None = None
+    starting_opening: Opening | None = None
     if args.fen:
         try:
             board = chess.Board(args.fen)
@@ -951,11 +1012,34 @@ def main(argv: list[str] | None = None) -> None:
         except ValueError as exc:
             print(f"Error: invalid FEN: {exc}", file=sys.stderr)
             sys.exit(1)
+    elif args.opening:
+        try:
+            starting_opening = resolve_opening(args.opening)
+        except UnknownOpening as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except AmbiguousOpeningQuery as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        # Replay the opening's canonical PGN through BoardState (not
+        # just construct from its resulting board) so the SAN history
+        # is populated.  Network players like Maia-3 with
+        # ``--use-history`` rely on the move list to feed the
+        # transformer's position history.
+        try:
+            state = BoardState.from_pgn(starting_opening.pgn)
+        except ValueError as exc:
+            print(
+                f"Error: could not replay opening {args.opening!r}: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     ChessApp(
         state=state,
         players=players,
         observers=flat_observers,
+        opening=starting_opening,
     ).run()
 
 

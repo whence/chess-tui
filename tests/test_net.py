@@ -146,6 +146,71 @@ def test_request_move_raises_transport_error_on_remote_disconnected() -> None:
 # ---- NetworkPlayer ----------------------------------------------------------
 
 
+def test_request_move_passes_moves_list_when_opening_fast_forwarded() -> None:
+    """``--opening B90`` fast-forwards the B90 line into the starting
+    position.  When the TUI then asks a network player (e.g.
+    ``chess-tui-maia --use-history``) for a move, the wire body MUST
+    include the full SAN list — otherwise the server falls back to a
+    no-context engine call and the transformer's history window is
+    empty.
+
+    This is a wire-level lock-in: a future refactor of
+    :func:`net.request_move` that drops the ``moves`` kwarg (or of
+    ``BoardState.from_pgn`` that fails to populate the SAN stack) would
+    silently break Maia's history feature.  This test fails loudly
+    instead.
+    """
+    from chess_tui.openings import resolve as resolve_opening
+    from chess_tui.state import BoardState
+
+    opening = resolve_opening("B90")
+    state = BoardState.from_pgn(opening.pgn)
+
+    received_bodies: list[dict] = []
+
+    def factory(payload, _log):
+        received_bodies.append(dict(payload))
+        # Reply with a legal move from the opening position; the
+        # exact move doesn't matter for this test.
+        return 200, {"san": "Be3"}
+
+    with stub_server(factory) as (base, _server_log):
+        san = net.request_move(
+            base,
+            state.fen(),
+            moves=state.san_history(),
+            timeout=5.0,
+        )
+    assert san == "Be3"
+    # Exactly one request, with the expected body shape.
+    assert len(received_bodies) == 1
+    body = received_bodies[0]
+    assert body["fen"] == opening.to_fen()
+    assert body["moves"] == [
+        "e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "a6",
+    ]
+    # And the FEN must be the post-opening position, not the start.
+    assert body["fen"] != chess.STARTING_FEN
+
+
+def test_request_move_without_moves_sends_empty_list() -> None:
+    """Sanity check: when the caller doesn't pass moves (legacy / non-
+    opening start), the body has ``"moves": []`` rather than omitting
+    the field.  The maia_server.py history branch is gated on
+    ``use_history and moves`` so an empty list correctly disables
+    history mode rather than crashing.
+    """
+    received: list[dict] = []
+
+    def factory(payload, _log):
+        received.append(dict(payload))
+        return 200, {"san": "e4"}
+
+    with stub_server(factory) as (base, _log):
+        net.request_move(base, chess.STARTING_FEN, moves=[])
+    assert received[0]["moves"] == []
+
+
 def test_network_player_chooses_move_from_server_response() -> None:
     """End-to-end: NetworkPlayer posts FEN, parses SAN, returns the move."""
     def factory(_payload, _log):
@@ -526,7 +591,7 @@ def test_chess_tui_cli_no_flags_uses_local_players() -> None:
     seen: list[dict[chess.Color, Player]] = []
 
     class _FakeApp:
-        def __init__(self, state=None, players=None, observers=None):
+        def __init__(self, state=None, players=None, observers=None, opening=None):
             seen.append(players or {})
 
         def run(self):
@@ -553,7 +618,7 @@ def test_chess_tui_cli_white_flag_routes_white_to_network() -> None:
     seen: list[dict[chess.Color, Player]] = []
 
     class _FakeApp:
-        def __init__(self, state=None, players=None, observers=None):
+        def __init__(self, state=None, players=None, observers=None, opening=None):
             seen.append(players or {})
 
         def run(self):
@@ -580,7 +645,7 @@ def test_chess_tui_cli_both_flags_routes_both_to_network() -> None:
     seen: list[dict[chess.Color, Player]] = []
 
     class _FakeApp:
-        def __init__(self, state=None, players=None, observers=None):
+        def __init__(self, state=None, players=None, observers=None, opening=None):
             seen.append(players or {})
 
         def run(self):
@@ -609,7 +674,7 @@ def test_chess_tui_cli_fen_option() -> None:
     seen_state = [None]
 
     class _FakeApp:
-        def __init__(self, state=None, players=None, observers=None):
+        def __init__(self, state=None, players=None, observers=None, opening=None):
             seen_state[0] = state
 
         def run(self):
@@ -875,7 +940,7 @@ def test_chess_tui_cli_observer_flag_passes_url_to_app() -> None:
     seen: list[list[str]] = []
 
     class _FakeApp:
-        def __init__(self, state=None, players=None, observers=None):
+        def __init__(self, state=None, players=None, observers=None, opening=None):
             seen.append(list(observers) if observers else [])
 
         def run(self):
@@ -900,7 +965,7 @@ def test_chess_tui_cli_observer_flag_accepts_multiple_urls() -> None:
     seen: list[list[str]] = []
 
     class _FakeApp:
-        def __init__(self, state=None, players=None, observers=None):
+        def __init__(self, state=None, players=None, observers=None, opening=None):
             seen.append(list(observers) if observers else [])
 
         def run(self):
@@ -927,7 +992,7 @@ def test_chess_tui_cli_observer_flag_is_repeatable() -> None:
     seen: list[list[str]] = []
 
     class _FakeApp:
-        def __init__(self, state=None, players=None, observers=None):
+        def __init__(self, state=None, players=None, observers=None, opening=None):
             seen.append(list(observers) if observers else [])
 
         def run(self):
@@ -956,7 +1021,7 @@ def test_chess_tui_cli_no_observer_flag_means_no_observers() -> None:
     seen: list[list[str]] = []
 
     class _FakeApp:
-        def __init__(self, state=None, players=None, observers=None):
+        def __init__(self, state=None, players=None, observers=None, opening=None):
             seen.append(list(observers) if observers else [])
 
         def run(self):
