@@ -49,7 +49,9 @@ def test_every_entry_has_parseable_pgn() -> None:
 
 
 def test_opening_columns_populated() -> None:
-    o = resolve("B90")
+    # ``resolve("B90")`` is now ambiguous (15 B90 entries), so we
+    # use ``find`` and pick the parent (the B90 root) directly.
+    o = find("B90")[0]
     assert o.eco == "B90"
     assert o.name
     assert o.pgn
@@ -60,7 +62,7 @@ def test_opening_columns_populated() -> None:
 def test_opening_to_fen_round_trip() -> None:
     """``to_fen()`` should give a string python-chess accepts and that
     matches ``chess.Board.from_fen(...).fen()`` after normalization."""
-    o = resolve("B90")
+    o = find("B90")[0]
     fen = o.to_fen()
     board = chess.Board(fen)
     # ``fen()`` re-serialization should be stable.
@@ -102,16 +104,54 @@ def test_find_empty_returns_everything() -> None:
     assert full == []
 
 
-def test_resolve_exact_eco() -> None:
-    o = resolve("B90")
-    assert o.eco == "B90"
-    assert "Najdorf" in o.name
+def test_resolve_exact_eco_now_ambiguous() -> None:
+    """``resolve("B90")`` used to silently return the B90 root
+    (first match in the file).  We changed it: exact ECO matches
+    now go through the same path as substring matches, so the
+    selector shows up for the user to pick a specific entry."""
+    with pytest.raises(AmbiguousOpeningQuery) as excinfo:
+        resolve("B90")
+    matches = excinfo.value.matches
+    # The parent (shortest PGN) is the first match.
+    assert matches[0].eco == "B90"
+    assert "Najdorf" in matches[0].name
+    # And there are several siblings.
+    assert len(matches) > 1
 
 
-def test_resolve_exact_name_case_insensitive() -> None:
-    a = resolve("Sicilian Defense: Najdorf Variation")
-    b = resolve("sicilian defense: najdorf variation")
-    assert a == b
+def test_resolve_exact_name_now_ambiguous_when_transposed() -> None:
+    """The dataset records the same named sub-line under multiple
+    PGNs (transpositions).  ``resolve`` used to pick the first
+    one silently; now it raises so the selector can show them all.
+
+    The B90 Najdorf English Attack cluster has 5 transpositions of
+    the same line.  We filter to the (eco, name) cluster so we
+    don't count the slightly different "Anti-English" variant in
+    the same substring match.
+    """
+    with pytest.raises(AmbiguousOpeningQuery) as excinfo:
+        resolve("Sicilian Defense: Najdorf Variation, English Attack")
+    cluster = [
+        m
+        for m in excinfo.value.matches
+        if m.name == "Sicilian Defense: Najdorf Variation, English Attack"
+    ]
+    # The cluster has at least 2 transpositions.
+    assert len(cluster) >= 2
+    # All 5 transpositions share the same name and ECO.
+    assert all(m.name == cluster[0].name for m in cluster)
+    assert all(m.eco == cluster[0].eco for m in cluster)
+
+
+def test_resolve_case_insensitive_unique_still_works() -> None:
+    """Case-insensitive name lookup still works for unambiguous
+    queries.  ``"Bongcloud Attack"`` is unique in the catalog so
+    it resolves directly regardless of case."""
+    a = resolve("Bongcloud Attack")
+    b = resolve("bongcloud attack")
+    c = resolve("BONGCLOUD ATTACK")
+    assert a == b == c
+    assert a.eco == "C20"
 
 
 def test_resolve_unique_substring() -> None:
@@ -227,7 +267,8 @@ def test_resolve_empty_raises() -> None:
 def test_famous_openings_replay_correctly(
     query: str, expected_pgn_prefix: str
 ) -> None:
-    o = resolve(query)
+    # The parent (shortest PGN) is the first match returned by find.
+    o = find(query)[0]
     # The canonical PGN must start with the expected opening moves.
     assert o.pgn.startswith(expected_pgn_prefix)
     # And the resulting FEN must have a real piece layout — not the

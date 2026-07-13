@@ -52,17 +52,21 @@ Controls:
 Flags:
 - `--fen FEN` — start from a specific position.
 - `--opening NAME` — start from a named opening. Accepts an ECO code
-  (e.g. `B90`), a full name (e.g. `Sicilian Defense: Najdorf
-  Variation`), or a case-insensitive substring. Mutually exclusive
+  (e.g. `B90`), a full name (e.g. `Sicilian Defense: Bowdler
+  Attack`), or a case-insensitive substring. Mutually exclusive
   with `--fen`. The opening's name and ECO are shown in the title bar.
-  If the query matches more than one row (e.g. `--opening najdorf`
-  matches 33 candidates, several of which are transposition
-  duplicates of the same named sub-variation), the TUI pops up an
-  interactive selector before the board mounts: pick with the arrow
-  keys and Enter, or Escape to cancel and quit. Transposition
-  duplicates (rows with the same ECO *and* name) are listed with a
-  move-diff column that omits the common prefix and shows only the
-  divergent tail, e.g. `→ e5 Nb3 Be6 f3`.
+  Any query that matches more than one row triggers an interactive
+  selector before the board mounts: pick with the arrow keys and
+  Enter, or Escape to cancel and quit. This applies uniformly — even
+  an exact ECO like `--opening B90` (15 entries in the B90 family)
+  and an exact name like `--opening "Sicilian Defense: Najdorf
+  Variation, English Attack"` (5 transposition duplicates) show the
+  selector so the user can pick the specific line they want. The
+  only fast path is a query that matches exactly one entry
+  (e.g. `--opening Bongcloud Attack`), which resolves silently.
+  Transposition duplicates (rows with the same ECO *and* name) are
+  listed with a move-diff column that omits the common prefix and
+  shows only the divergent tail, e.g. `→ e5 Nb3 Be6 f3`.
 - `--list-openings [SUBSTRING]` — print every bundled opening whose
   name or ECO matches `SUBSTRING` (default: list all ~3,800) and exit.
   Useful for discovering the exact name to feed into `--opening`.

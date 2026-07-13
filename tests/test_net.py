@@ -160,10 +160,15 @@ def test_request_move_passes_moves_list_when_opening_fast_forwarded() -> None:
     silently break Maia's history feature.  This test fails loudly
     instead.
     """
-    from chess_tui.openings import resolve as resolve_opening
+    from chess_tui.openings import find
     from chess_tui.state import BoardState
 
-    opening = resolve_opening("B90")
+    # ``resolve("B90")`` is now ambiguous (15 B90 entries) so we
+    # use ``find`` and pick the parent (the B90 root, which is the
+    # canonical 5-ply Najdorf with ...a6).  This is the same row
+    # that ``--opening B90`` would have selected under the old
+    # exact-ECO branch, before we made B90 trigger the selector.
+    opening = find("B90")[0]
     state = BoardState.from_pgn(opening.pgn)
 
     received_bodies: list[dict] = []

@@ -430,8 +430,9 @@ async def test_default_theme_is_checkered() -> None:
 async def test_opening_kwarg_sets_title_and_state() -> None:
     """Passing an Opening to ChessApp should set the board position
     and show the opening name + ECO in the title bar."""
-    from chess_tui.openings import resolve as resolve_opening
-    opening = resolve_opening("B90")
+    from chess_tui.openings import find
+    # ``resolve("B90")`` is now ambiguous; we want the B90 root.
+    opening = find("B90")[0]
     state = BoardState(board=opening.to_board())
     app = ChessApp(state=state, opening=opening)
     async with app.run_test() as pilot:
@@ -458,8 +459,8 @@ async def test_opening_used_as_starting_position_for_moves() -> None:
     """After starting from Najdorf, the legal move list should contain
     the moves natural to that position (e.g. white's knight on d4 has
     many options), and the SAN history should be empty until we play."""
-    from chess_tui.openings import resolve as resolve_opening
-    opening = resolve_opening("B90")
+    from chess_tui.openings import find
+    opening = find("B90")[0]
     state = BoardState(board=opening.to_board())
     app = ChessApp(state=state, opening=opening)
     async with app.run_test() as pilot:
@@ -481,8 +482,11 @@ async def test_opening_populates_san_history_for_network_players() -> None:
     by ``--opening``) populates the SAN stack the same way
     ``apply_move`` would.
     """
-    from chess_tui.openings import resolve as resolve_opening
-    opening = resolve_opening("B90")
+    from chess_tui.openings import find
+    # ``resolve("B90")`` is now ambiguous (15 B90 entries), so we
+    # use ``find`` and pick the parent (the B90 root).  This is the
+    # same row the old exact-ECO branch of resolve() returned.
+    opening = find("B90")[0]
     # Replay the opening through BoardState — same call as main().
     state = BoardState.from_pgn(opening.pgn)
     history = state.san_history()

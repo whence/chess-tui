@@ -65,6 +65,8 @@ def test_list_openings_exits_before_construction(capsys, patched_run) -> None:
 
 
 def test_opening_flag_resolves_to_state(patched_run) -> None:
+    """A unique-name query (one match in the catalog) should resolve
+    directly and apply the opening's PGN to the state."""
     captured_state: dict = {}
 
     real_init = app_module.ChessApp.__init__
@@ -75,7 +77,7 @@ def test_opening_flag_resolves_to_state(patched_run) -> None:
         real_init(self, *args, **kwargs)
 
     with patch.object(app_module.ChessApp, "__init__", spy_init):
-        rc = app_module.main(["--opening", "B90"])
+        rc = app_module.main(["--opening", "Bongcloud Attack"])
 
     assert rc is None
     state = captured_state["state"]
@@ -91,12 +93,11 @@ def test_opening_flag_resolves_to_state(patched_run) -> None:
     # transformer's position history; an empty history would silently
     # fall back to no-context mode.
     history = state.san_history()
-    assert history == [
-        "e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "a6",
-    ]
+    assert history == ["e4", "e5", "Ke2"]
 
 
 def test_opening_flag_uses_name_lookup(patched_run) -> None:
+    """A unique full-name query should resolve to the right ECO."""
     captured: dict = {}
     real_init = app_module.ChessApp.__init__
 
@@ -106,10 +107,11 @@ def test_opening_flag_uses_name_lookup(patched_run) -> None:
 
     with patch.object(app_module.ChessApp, "__init__", spy):
         app_module.main(
-            ["--opening", "Sicilian Defense: Najdorf Variation"]
+            ["--opening", "Sicilian Defense: Bowdler Attack"]
         )
 
-    assert captured["opening"].eco == "B90"
+    # Bowdler Attack is a unique-named Sicilian sub-variation.
+    assert captured["opening"].eco == "B20"
 
 
 def test_opening_and_fen_are_mutually_exclusive(
@@ -134,6 +136,103 @@ def test_opening_unknown_query_exits_with_error(
         app_module.main(["--opening", "this is not a real opening xyz"])
     assert excinfo.value.code == 1
     assert "no opening matches" in capsys.readouterr().err
+
+
+def test_opening_eco_code_passes_choices_to_app(patched_run) -> None:
+    """``--opening B90`` used to silently pick the B90 root via
+    the exact-ECO branch.  We changed it: ECO codes now go through
+    the same path as substring matches, so the selector pops up
+    with the full B90 family (15 entries) and the user picks one.
+
+    This locks in the new behavior: scripts/tests that want a
+    specific entry must use ``find("B90")[0]`` (or similar) to
+    pick deterministically.  The CLI path always defers to the
+    selector when the catalog has more than one match.
+    """
+    captured: dict = {}
+    real_init = app_module.ChessApp.__init__
+    app_ref: dict = {}
+
+    def spy(self, *args, **kwargs):
+        captured["state"] = kwargs.get("state")
+        captured["opening"] = kwargs.get("opening")
+        app_ref["app"] = self
+        real_init(self, *args, **kwargs)
+
+    with patch.object(app_module.ChessApp, "__init__", spy):
+        app_module.main(["--opening", "B90"])
+
+    # No opening resolved yet.
+    assert captured["opening"] is None
+    # The CLI set the candidates on the instance after __init__.
+    app = app_ref["app"]
+    choices = getattr(app, "_opening_choices", None)
+    assert choices is not None
+    # The whole B90 family — root, Adams Attack, English Attack, etc.
+    assert len(choices) >= 2
+    assert all(o.eco == "B90" for o in choices)
+    # And the modal knows what to label itself with.
+    assert getattr(app, "_opening_query", None) == "B90"
+
+
+def test_opening_exact_name_with_transpositions_passes_choices(patched_run) -> None:
+    """``--opening "Sicilian Defense: Najdorf Variation, English Attack"``
+    has 5 transposition duplicates in the catalog (same name, same
+    ECO, different PGNs).  The old behavior was to silently pick the
+    first; the new behavior is to surface all 5 in the selector so
+    the user can pick the move order they actually want."""
+    captured: dict = {}
+    real_init = app_module.ChessApp.__init__
+    app_ref: dict = {}
+
+    def spy(self, *args, **kwargs):
+        captured["opening"] = kwargs.get("opening")
+        app_ref["app"] = self
+        real_init(self, *args, **kwargs)
+
+    with patch.object(app_module.ChessApp, "__init__", spy):
+        app_module.main(
+            ["--opening", "Sicilian Defense: Najdorf Variation, English Attack"]
+        )
+
+    assert captured["opening"] is None
+    app = app_ref["app"]
+    choices = getattr(app, "_opening_choices", None)
+    assert choices is not None
+    # The substring matches all 5 transpositions plus the slightly
+    # different "Anti-English" variant — so 6 in total.
+    assert len(choices) >= 5
+    # All 5 transpositions share the (eco, name) tuple.
+    cluster = [
+        c
+        for c in choices
+        if c.name == "Sicilian Defense: Najdorf Variation, English Attack"
+    ]
+    assert len(cluster) == 5
+
+
+def test_opening_unique_name_resolves_without_selector(patched_run) -> None:
+    """A query that matches exactly one opening should resolve
+    directly, no selector, no popup.  This is the fast path that
+    scripts / power-users can rely on: as long as the query is
+    unique, it works without any user interaction."""
+    captured: dict = {}
+    real_init = app_module.ChessApp.__init__
+
+    def spy(self, *args, **kwargs):
+        captured["state"] = kwargs.get("state")
+        captured["opening"] = kwargs.get("opening")
+        real_init(self, *args, **kwargs)
+
+    with patch.object(app_module.ChessApp, "__init__", spy):
+        app_module.main(["--opening", "Bongcloud Attack"])
+
+    # Resolved directly: no candidates, no _opening_choices.
+    assert captured["opening"] is not None
+    assert captured["opening"].eco == "C20"
+    assert captured["state"] is not None
+    # The state has the opening's SAN history.
+    assert captured["state"].san_history() == ["e4", "e5", "Ke2"]
 
 
 def test_opening_ambiguous_query_passes_choices_to_app(patched_run) -> None:

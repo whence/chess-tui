@@ -311,32 +311,26 @@ def move_suffixes(openings: Sequence[Opening]) -> list[str]:
 def resolve(query: str) -> Opening:
     """Resolve a query string to a single :class:`Opening`.
 
-    Resolution order:
+    Resolution is uniform: every query runs through :func:`find`
+    (case-insensitive substring on the name, plus prefix match on
+    the ECO code), and the count decides the outcome.
 
-    1. Exact ECO code (``"B90"``) -> first match.
-    2. Exact name (case-insensitive) -> first match.
-    3. Unique substring match -> that match.
-    4. Otherwise, raise :class:`AmbiguousOpeningQuery` or
-       :class:`UnknownOpening`.
+    - 0 matches -> :class:`UnknownOpening`
+    - 1 match  -> that match
+    - 2+ matches -> :class:`AmbiguousOpeningQuery` with the full
+      list, which the TUI uses to populate the interactive selector
+
+    We deliberately do **not** special-case exact ECO or exact name
+    to silently return the first match: ``--opening B90`` matches 15
+    entries (the whole B90 family) and the user usually wants to
+    pick a specific sub-variation, not be handed the B90 root
+    without being told there are alternatives.  Same for an exact
+    name like ``"Sicilian Defense"`` (389 candidates: every line
+    in the catalog that contains those words).
     """
     q = query.strip()
     if not q:
         raise UnknownOpening("empty opening query")
-
-    catalog = load_all()
-    ql = q.lower()
-
-    # 1. Exact ECO.
-    for o in catalog:
-        if o.eco.upper() == q.upper():
-            return o
-
-    # 2. Exact name (case-insensitive).
-    for o in catalog:
-        if o.name.lower() == ql:
-            return o
-
-    # 3. Unique substring / ECO prefix.
     matches = find(q)
     if not matches:
         raise UnknownOpening(f"no opening matches {query!r}")
