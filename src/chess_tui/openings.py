@@ -15,9 +15,10 @@ is trivial.
 from __future__ import annotations
 
 import functools
+from collections import defaultdict
 from dataclasses import dataclass
 from importlib import resources
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import chess
 import chess.pgn
@@ -217,6 +218,93 @@ def find(query: str) -> list[Opening]:
     for o in load_all():
         if q in o.name.lower() or o.eco.lower().startswith(q):
             out.append(o)
+    return out
+
+
+# ----- selector / disambiguation helpers -----------------------------------
+
+
+def _pgn_moves(pgn: str) -> list[str]:
+    """Tokenize a PGN string into a flat list of SAN moves.
+
+    Move numbers (``"1."``, ``"12..."``) and result markers
+    (``"1-0"``, ``"0-1"``, ``"1/2-1/2"``, ``"*"``) are dropped.  The
+    PGNs in the bundled dataset never carry comments or variations,
+    so a whitespace split is sufficient.
+    """
+    out: list[str] = []
+    for tok in pgn.split():
+        if tok.endswith(".") and tok[:-1].isdigit():
+            continue
+        if tok in {"1-0", "0-1", "1/2-1/2", "*"}:
+            continue
+        out.append(tok)
+    return out
+
+
+def move_suffixes(openings: Sequence[Opening]) -> list[str]:
+    """Return a per-opening move-diff label, used by the selector UI.
+
+    The lichess-org/chess-openings dataset records the *same* named
+    sub-variation multiple times if it can be reached by different
+    move orders (transpositions).  For example, ``"Sicilian Defense:
+    Najdorf Variation, English Attack"`` appears five times in B90,
+    each row with a different PGN that diverges somewhere in the
+    middle.
+
+    When the user runs ``--opening najdorf`` and gets back ~33
+    candidate rows, listing them all with identical names is
+    confusing.  This helper produces a short suffix for each row that
+    highlights what's distinct about it:
+
+    - If the row's ``(eco, name)`` is unique within ``openings``,
+      the label is the move count in plies, e.g. ``"(10 plies)"``.
+    - If the row shares its ``(eco, name)`` with at least one
+      sibling, the label is the divergent suffix after the common
+      prefix, prefixed with an arrow: ``"→ Be3"`` or
+      ``"→ e5 Nb3 Be6 f3"``.  The opening PGN already contains the
+      common moves, so the suffix alone is enough to identify which
+      of the transposition variants this row is.
+
+    The returned list is parallel to ``openings``.
+    """
+    # Group by (eco, name) so we can find the common prefix within
+    # each transposition cluster.
+    by_key: dict[tuple[str, str], list[list[str]]] = defaultdict(list)
+    for o in openings:
+        by_key[(o.eco, o.name)].append(_pgn_moves(o.pgn))
+
+    out: list[str] = []
+    for o in openings:
+        sibling_lists = by_key[(o.eco, o.name)]
+        mine = _pgn_moves(o.pgn)
+        if len(sibling_lists) == 1:
+            # No transposition siblings: the move count is the most
+            # useful compact label.
+            out.append(f"({len(mine)} plies)")
+            continue
+        # Multiple entries with the same (eco, name): compute the
+        # common-prefix length across the siblings.
+        min_len = min(len(s) for s in sibling_lists)
+        prefix_len = 0
+        while prefix_len < min_len:
+            ref = sibling_lists[0][prefix_len]
+            if all(
+                len(s) > prefix_len and s[prefix_len] == ref
+                for s in sibling_lists
+            ):
+                prefix_len += 1
+            else:
+                break
+        suffix_moves = mine[prefix_len:]
+        if not suffix_moves:
+            # This row is the shortest in the group — the parent
+            # that all siblings extend.  In practice this never
+            # happens because all siblings in a transposition cluster
+            # extend the parent, but we keep the branch for safety.
+            out.append("(parent)")
+        else:
+            out.append("\u2192 " + " ".join(suffix_moves))
     return out
 
 

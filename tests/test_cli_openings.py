@@ -136,14 +136,40 @@ def test_opening_unknown_query_exits_with_error(
     assert "no opening matches" in capsys.readouterr().err
 
 
-def test_opening_ambiguous_query_exits_with_error(
-    capsys, patched_run
-) -> None:
-    with pytest.raises(SystemExit) as excinfo:
+def test_opening_ambiguous_query_passes_choices_to_app(patched_run) -> None:
+    """An ambiguous substring used to exit 1; now it hands the list
+    of matches to the TUI which shows an interactive selector.  We
+    can't drive the selector here (that needs the pilot), but we
+    can verify that main() resolves the candidates and passes them
+    to ChessApp without exiting."""
+    captured: dict = {}
+    real_init = app_module.ChessApp.__init__
+    app_ref: dict = {}
+
+    def spy(self, *args, **kwargs):
+        captured["state"] = kwargs.get("state")
+        captured["opening"] = kwargs.get("opening")
+        # Hold a reference so we can read the post-__init__ attrs
+        # that main() sets when there's an ambiguous query.
+        app_ref["app"] = self
+        real_init(self, *args, **kwargs)
+
+    with patch.object(app_module.ChessApp, "__init__", spy):
         app_module.main(["--opening", "Sicilian"])
-    assert excinfo.value.code == 1
-    err = capsys.readouterr().err
-    assert "ambiguous" in err
+
+    # No opening resolved yet — the user picks one in the modal.
+    assert captured["opening"] is None
+    # The state is the default (startpos) until the user picks; the
+    # modal will replace it via _on_opening_chosen.
+    assert captured["state"] is None
+    # The CLI set the candidates on the instance after __init__.
+    app = app_ref["app"]
+    choices = getattr(app, "_opening_choices", None)
+    assert choices is not None
+    assert len(choices) > 1
+    assert all("Sicilian" in o.name for o in choices)
+    # And the modal knows what to label itself with.
+    assert getattr(app, "_opening_query", None) == "Sicilian"
 
 
 def test_no_opening_no_fen_uses_default(patched_run) -> None:

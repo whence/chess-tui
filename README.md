@@ -18,7 +18,7 @@ There are already great terminal chess apps out there:
 4. **Move/capture sounds** — Different sounds for regular moves and captures.
 5. **Promotion selector** — Visual picker when pawn reaches the last rank.
 6. **FEN support** — Start from any position with `--fen`.
-7. **Named openings** — Start from a named opening with `--opening` (e.g. `--opening B90` or `--opening "Sicilian Defense: Najdorf Variation"`). The opening's moves are replayed so the SAN history is populated — this means history-aware network players like `chess-tui-maia --use-history` get the opening positions as transformer context. The opening name and ECO code are shown in the title bar. Browse the bundled catalog with `--list-openings` (optionally filter by substring). Sourced from the [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings) dataset (CC0).
+7. **Named openings** — Start from a named opening with `--opening` (e.g. `--opening B90` or `--opening "Sicilian Defense: Najdorf Variation"`). The opening's moves are replayed so the SAN history is populated — this means history-aware network players like `chess-tui-maia --use-history` get the opening positions as transformer context. The opening name and ECO code are shown in the title bar. Browse the bundled catalog with `--list-openings` (optionally filter by substring). If the query matches more than one row, an interactive selector pops up before the board mounts (arrow keys + Enter to pick, Esc to cancel). Sourced from the [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings) dataset (CC0).
 7. **Python/Textual** — Easy to extend, modify, and contribute to.
 
 ## Setup
@@ -55,6 +55,14 @@ Flags:
   (e.g. `B90`), a full name (e.g. `Sicilian Defense: Najdorf
   Variation`), or a case-insensitive substring. Mutually exclusive
   with `--fen`. The opening's name and ECO are shown in the title bar.
+  If the query matches more than one row (e.g. `--opening najdorf`
+  matches 33 candidates, several of which are transposition
+  duplicates of the same named sub-variation), the TUI pops up an
+  interactive selector before the board mounts: pick with the arrow
+  keys and Enter, or Escape to cancel and quit. Transposition
+  duplicates (rows with the same ECO *and* name) are listed with a
+  move-diff column that omits the common prefix and shows only the
+  divergent tail, e.g. `→ e5 Nb3 Be6 f3`.
 - `--list-openings [SUBSTRING]` — print every bundled opening whose
   name or ECO matches `SUBSTRING` (default: list all ~3,800) and exit.
   Useful for discovering the exact name to feed into `--opening`.

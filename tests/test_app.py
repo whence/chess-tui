@@ -14,7 +14,7 @@ import pytest
 from chess_tui.app import Cell, ChessApp, FileBar, RankBar, TextLine
 from chess_tui.state import BoardState
 from chess_tui.themes import THEME
-from textual.widgets import Input, ListView
+from textual.widgets import Input, Label, ListView
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -635,3 +635,163 @@ async def test_o_binding_exists_in_app_bindings() -> None:
     o_bindings = [b for b in ChessApp.BINDINGS if b.key == "o"]
     assert o_bindings, "no 'o' binding registered"
     assert o_bindings[0].action == "adhoc_observer"
+
+
+# ---- opening selector (ModalScreen) ----------------------------------------
+
+
+async def test_opening_selector_pops_on_mount_with_choices() -> None:
+    """When the app is constructed with ``opening_choices``, the
+    selector modal should be the active screen after mount."""
+    from chess_tui.openings import find
+
+    choices = find("Bongcloud")  # 1 match — degenerate but valid
+    app = ChessApp(opening_choices=choices)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # The active screen should be a modal selector.  The base
+        # ChessApp screen is still mounted underneath, so we look at
+        # the top of the screen stack.
+        from textual.screen import ModalScreen
+        from chess_tui.app import OpeningSelectorScreen
+        top = app.screen
+        assert isinstance(top, OpeningSelectorScreen)
+        # And it has exactly 1 ListItem (Bongcloud).
+        lv = app.screen.query_one("#opening-selector-list")
+        assert len(lv.children) == 1
+
+
+async def test_opening_selector_enter_picks_first_row_and_applies_state() -> None:
+    """Pressing Enter on the top row should dismiss the modal and
+    apply the chosen opening's PGN to the state.  We verify via the
+    FEN — the startpos should be replaced."""
+    from chess_tui.openings import find
+
+    # Use 2+ distinct English Attack variants so we can also check
+    # navigation in another test.  Here we just want to verify that
+    # selecting applies state.
+    choices = find("Bongcloud")
+    app = ChessApp(opening_choices=choices)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # The modal is the top screen.
+        assert app.screen.__class__.__name__ == "OpeningSelectorScreen"
+        # The default row (index 0) is pre-selected.
+        await pilot.press("enter")
+        await pilot.pause()
+        # Modal is gone.
+        assert app.screen.__class__.__name__ != "OpeningSelectorScreen"
+        # The state is now the Bongcloud position, not the startpos.
+        # Bongcloud Attack = 1. e4 e5 2. Ke2.  So White played 1. e4,
+        # 2. Ke2 (yes, really — that's the whole point of Bongcloud).
+        fen = app._state.fen()
+        assert fen != chess.STARTING_FEN
+        # And the SAN history is populated (needed for network
+        # players that use --use-history).
+        history = app._state.san_history()
+        assert history == ["e4", "e5", "Ke2"]
+        # The opening attribute is set so the title bar shows it.
+        assert app._opening is not None
+        assert app._opening.eco == "C20"
+
+
+async def test_opening_selector_arrow_keys_navigate_then_enter_picks() -> None:
+    """Down-arrow should move the highlight, Enter should pick the
+    highlighted row."""
+    from chess_tui.openings import find
+
+    # Two distinct, named "Italian Game" entries that both share the
+    # C50 ECO.  Substring 'Italian Game' has many; filter to first 2
+    # for a deterministic test.
+    choices = find("Italian Game")[:2]
+    assert len(choices) >= 2, "test needs at least 2 candidates"
+
+    app = ChessApp(opening_choices=choices)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from chess_tui.app import OpeningSelectorScreen
+        modal = app.screen
+        assert isinstance(modal, OpeningSelectorScreen)
+
+        # Start at index 0; press down to go to index 1.
+        lv = app.screen.query_one("#opening-selector-list")
+        assert lv.index == 0
+        await pilot.press("down")
+        await pilot.pause()
+        assert lv.index == 1
+
+        # Press Enter — the second choice should be applied.
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app._opening is not None
+        assert app._opening.eco == choices[1].eco
+        # The resulting FEN must match the chosen opening.
+        assert app._state.fen() == choices[1].to_fen()
+
+
+async def test_opening_selector_escape_cancels_and_exits() -> None:
+    """Escape should dismiss the modal with None, and the app
+    should exit (per the spec, cancelling the selector means
+    "don't play any of these, quit")."""
+    from chess_tui.openings import find
+
+    choices = find("Italian Game")[:2]
+    app = ChessApp(opening_choices=choices)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from chess_tui.app import OpeningSelectorScreen
+        assert isinstance(app.screen, OpeningSelectorScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        # The TUI exited; app.is_running should be False.  Reaching
+        # this point without an exception is the success criterion.
+        assert not app.is_running
+
+
+async def test_opening_selector_shows_transposition_diff() -> None:
+    """When the candidates include transposition duplicates (rows
+    with the same ECO + name but different PGNs), the selector
+    should label them with the divergent-move suffix, not just the
+    name.  We verify by reading the rendered list rows."""
+    from chess_tui.app import OpeningSelectorScreen
+    from chess_tui.openings import find
+
+    # B90 English Attack has 5 transposition duplicates.
+    matches = find("Najdorf Variation, English Attack")
+    # Filter to just the (eco, name) cluster (excluding the
+    # Anti-English variant, which has a distinct name).
+    cluster = [
+        o
+        for o in matches
+        if o.name == "Sicilian Defense: Najdorf Variation, English Attack"
+    ]
+    assert len(cluster) >= 2, "test premise: need transposition siblings"
+
+    app = ChessApp(opening_choices=cluster)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, OpeningSelectorScreen)
+        lv = app.screen.query_one("#opening-selector-list")
+        # Read the labels of all rows.  The parent row should be
+        # labeled "(parent)" and the divergent rows should start
+        # with the arrow.
+        labels = []
+        for item in lv.children:
+            label_widget = item.query_one(Label)
+            # Label extends Static; the constructor stores its
+            # content in a name-mangled ``__content`` attribute
+            # (accessible as ``_Static__content``).  The public
+            # ``renderable`` property on Static returns a Rich
+            # ``Visual`` object, not the original string, so we
+            # reach into the mangled attribute to read the text we
+            # passed in.
+            text = getattr(
+                label_widget, "_Static__content", str(label_widget)
+            )
+            labels.append(str(text))
+        # The parent label appears exactly once.
+        assert sum("(" in l and "parent" in l for l in labels) == 1
+        # And at least one row has the arrow diff.
+        assert any("\u2192" in l for l in labels)

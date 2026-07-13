@@ -128,6 +128,79 @@ def test_resolve_ambiguous_raises_with_matches() -> None:
     assert all("Sicilian" in o.name for o in excinfo.value.matches)
 
 
+# ---- move_suffixes (used by the interactive selector) --------------------
+
+
+def test_move_suffixes_unique_entry_gets_ply_count() -> None:
+    """A row with no (eco, name) siblings in the input list should
+    get a ply count, not a divergent suffix."""
+    from chess_tui.openings import move_suffixes
+
+    o = resolve("Bongcloud")  # unique in the catalog
+    suffixes = move_suffixes([o])
+    assert len(suffixes) == 1
+    assert "plies" in suffixes[0]
+    assert "→" not in suffixes[0]
+
+
+def test_move_suffixes_transposition_cluster_shows_divergent_suffix() -> None:
+    """Sicilian Najdorf English Attack has 5 transposition
+    duplicates in the dataset.  Their common prefix is 6 plies;
+    the suffixes should show only the divergent moves."""
+    from chess_tui.openings import find, move_suffixes
+
+    cluster = [
+        o
+        for o in find("Najdorf Variation, English Attack")
+        if o.name == "Sicilian Defense: Najdorf Variation, English Attack"
+    ]
+    assert len(cluster) >= 2, "test premise: cluster should have siblings"
+
+    suffixes = move_suffixes(cluster)
+
+    # The parent (shortest PGN) gets the "(parent)" label.
+    parents = [s for s in suffixes if s == "(parent)"]
+    assert len(parents) == 1
+
+    # Every other row gets a divergent suffix starting with the
+    # arrow.  The parent PGN is 6 plies, so all divergent suffixes
+    # start with the 7th ply's move (e5 or Ng4).
+    divergents = [s for s in suffixes if s != "(parent)"]
+    assert divergents
+    for s in divergents:
+        assert s.startswith("→")
+        # The first divergent move must be one of the actual
+        # 7th-ply candidates in the dataset (e5 or Ng4).
+        first_move = s.split()[1]
+        assert first_move in {"e5", "Ng4"}
+
+
+def test_move_suffixes_mixed_input() -> None:
+    """When the input has a mix of unique and clustered rows, each
+    row gets the right label independently."""
+    from chess_tui.openings import find, move_suffixes
+
+    cluster = [
+        o
+        for o in find("Najdorf Variation, English Attack")
+        if o.name == "Sicilian Defense: Najdorf Variation, English Attack"
+    ]
+    unique = [find("Bongcloud")[0]]
+    mixed = cluster + unique
+
+    suffixes = move_suffixes(mixed)
+    assert len(suffixes) == len(mixed)
+
+    # Cluster rows: one "(parent)", rest "→ ..."
+    cluster_suf = suffixes[: len(cluster)]
+    assert sum(1 for s in cluster_suf if s == "(parent)") == 1
+    assert sum(1 for s in cluster_suf if s.startswith("→")) == len(cluster) - 1
+
+    # The unique row gets a ply count.
+    assert "plies" in suffixes[-1]
+    assert "→" not in suffixes[-1]
+
+
 def test_resolve_unknown_raises() -> None:
     with pytest.raises(UnknownOpening):
         resolve("this opening does not exist xyzzy")
