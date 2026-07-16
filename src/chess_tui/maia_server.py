@@ -1,11 +1,11 @@
 """Maia-3-powered network player server for chess-tui.
 
-Run with ``uv run chess-tui-maia [options]``. Spawns the ``maia3-5m`` UCI
-engine (from the separate ``maia3`` Python package) and exposes the same
+Run with ``uv run chess-tui-maia [options]``. Spawns a ``maia3-{5m,23m,79m}``
+UCI engine (from the separate ``maia3`` Python package) and exposes the same
 ``POST /move`` RESTful protocol as the other chess-tui network players.
 
 The ``maia3`` package is **not** a dependency of chess-tui itself — it is
-installed separately. The path to the ``maia3-5m`` executable (or any
+installed separately. The path to the ``maia3-*`` executable (or any
 compatible ``maia3-uci`` invocation) is read from the ``maia`` section of
 ``engines.json``.
 
@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import random
 import sys
 import threading
@@ -27,6 +28,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chess
 import chess.engine
 
+# Note: we intentionally do NOT import torch here. The `maia3` package lives
+# in its own venv (it's not a chess-tui dependency), so torch is only
+# available inside the maia3-79m subprocess — not in this host process.
+# Device detection uses platform checks instead; if the heuristic is wrong
+# the user can override with --device mps|cuda|cpu.
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Navigate from src/chess_tui/ to project root
 PROJECT_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))
@@ -35,6 +42,46 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 # (maia3-uci's --history default). The released checkpoints do not support
 # other values, so we hard-code the same 8 for the history log.
 MAIA_HISTORY_WINDOW = 8
+
+
+def _resolve_device(requested: str) -> str:
+    """Map a --device flag to the device string maia3-uci expects.
+
+    Choices:
+        auto — Apple Silicon (macOS+arm64) → mps, else cuda (most common on
+               Linux), else cpu. The auto heuristic uses platform checks; we
+               cannot introspect CUDA from the host process because torch
+               lives in maia3's separate venv. If you're on a Linux box
+               without CUDA, pass --device cpu explicitly.
+        mps  — Apple Metal Performance Shaders (M-series Macs).
+        cuda — NVIDIA CUDA.
+        cpu  — plain CPU.
+
+    On Apple Silicon (M1/M2/M3/M4/M5) ``auto`` picks ``mps`` so the 79M/270M
+    models run ~5–10x faster than CPU. The 5M is so small the difference is
+    mostly cosmetic, but the user shouldn't have to think about it.
+    """
+    if requested == "auto":
+        if sys.platform == "darwin" and platform.machine() == "arm64":
+            return "mps"
+        # On non-Apple-Silicon hosts we can't introspect CUDA without torch.
+        # Default to cuda (common ML setup) and let the user override --device
+        # cpu if needed.
+        if sys.platform == "darwin":
+            return "cpu"  # Intel Mac
+        return "cuda"
+    if requested == "mps":
+        if sys.platform != "darwin" or platform.machine() != "arm64":
+            print(
+                "Error: --device mps requested but this is not an Apple Silicon Mac.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return "mps"
+    if requested in ("cuda", "cpu"):
+        return requested
+    print(f"Error: unknown --device value: {requested!r}", file=sys.stderr)
+    sys.exit(1)
 
 
 def _load_engines_config() -> dict:
@@ -48,13 +95,18 @@ def _load_engines_config() -> dict:
         sys.exit(1)
 
 
-def _start_maia_engine(maia_path: str, use_history: bool) -> chess.engine.SimpleEngine:
+def _start_maia_engine(
+    maia_path: str, use_history: bool, device: str, use_amp: bool
+) -> chess.engine.SimpleEngine:
     """Spawn the maia3 UCI engine as a long-lived subprocess.
 
-    Forces CPU-only execution and (optionally) enables --use-uci-history so
-    maia receives the move history as transformer context.
+    The device defaults to ``auto`` (MPS on Apple Silicon, CUDA if available,
+    else CPU). ``--use-amp`` is on by default but only takes effect on CUDA in
+    maia3 itself, so on MPS the model runs in fp32 — still fast for the 79M.
     """
-    cmd = [maia_path, "--device", "cpu", "--no-use-amp"]
+    cmd = [maia_path, "--device", device]
+    if not use_amp:
+        cmd.append("--no-use-amp")
     if use_history:
         cmd.append("--use-uci-history")
     return chess.engine.SimpleEngine.popen_uci(cmd)
@@ -250,7 +302,7 @@ def main(argv: list[str] | None = None) -> None:
         prog="chess-tui-maia",
         description=(
             "Maia-3-powered network player server for chess-tui. "
-            "Spawns the maia3-5m UCI engine and exposes it over HTTP."
+            "Spawns a maia3-* UCI engine (5M/23M/79M) and exposes it over HTTP."
         ),
     )
     parser.add_argument(
@@ -324,6 +376,24 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
+        "--device",
+        choices=["auto", "mps", "cuda", "cpu"],
+        default="auto",
+        help=(
+            "torch device for the maia subprocess. 'auto' prefers MPS on "
+            "Apple Silicon, then CUDA, then CPU. Default: auto."
+        ),
+    )
+    parser.add_argument(
+        "--use-amp",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "forward --use-amp/--no-use-amp to maia. maia only applies AMP "
+            "on CUDA, so on MPS/CPU this is effectively a no-op. Default: on."
+        ),
+    )
+    parser.add_argument(
         "--min-wait",
         type=float,
         default=0.5,
@@ -354,22 +424,34 @@ def main(argv: list[str] | None = None) -> None:
     maia_config = config.get("maia")
     if not maia_config:
         print("Error: 'maia' not found in engines.json", file=sys.stderr)
-        print("Add a 'maia' entry, e.g. { \"maia\": { \"path\": \"maia3-5m\" } }", file=sys.stderr)
+        print("Add a 'maia' entry, e.g. { \"maia\": { \"path\": \"maia3-79m\" } }", file=sys.stderr)
         sys.exit(1)
     maia_path = os.path.expanduser(maia_config.get("path", ""))
     if not maia_path:
         print("Error: 'maia.path' is empty in engines.json", file=sys.stderr)
         sys.exit(1)
 
-    # Spawn the maia engine.
-    print(f"Spawning Maia3 UCI engine: {maia_path}...", flush=True)
+    # Resolve the torch device before spawning (so MPS/CUDA errors fail fast
+    # with a clear message instead of a cryptic maia crash).
+    device = _resolve_device(args.device)
+    print(
+        f"Spawning Maia3 UCI engine: {maia_path} "
+        f"(device={device}, amp={'on' if args.use_amp else 'off'})...",
+        flush=True,
+    )
     try:
-        engine = _start_maia_engine(maia_path, use_history=args.use_history)
+        engine = _start_maia_engine(
+            maia_path,
+            use_history=args.use_history,
+            device=device,
+            use_amp=args.use_amp,
+        )
     except FileNotFoundError as exc:
         print(f"Error: maia engine not found at {maia_path}: {exc}", file=sys.stderr)
         print(
-            "Install with: pip install maia3   (then 'maia3-5m' is on PATH)\n"
-            "Pre-download the model: maia3-cache",
+            "Install with: uv tool install 'maia3 @ git+https://github.com/CSSLab/maia3.git'\n"
+            "  (then 'maia3-5m' / 'maia3-23m' / 'maia3-79m' are on PATH)\n"
+            "Pre-download the model: maia3-cache --model maia3-79m",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -418,7 +500,8 @@ def main(argv: list[str] | None = None) -> None:
     from .host import describe_listen
     print(
         f"chess-tui maia server listening on {describe_listen(args.host, args.port)}\n"
-        f"  Engine: Maia3-5M (via {maia_path})\n"
+        f"  Engine: {os.path.basename(maia_path)} (via {maia_path})\n"
+        f"  Device: {device} | AMP: {'on' if args.use_amp else 'off'}\n"
         f"  Elo: self={self_elo}, oppo={oppo_elo}\n"
         f"  Temperature: {args.temperature}\n"
         f"  Top-p: {args.top_p}\n"

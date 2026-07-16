@@ -190,15 +190,20 @@ uv run chess-tui-nova 8082 --elo 1000 --temperature 1.3 --top-p 0.95 --blunder-r
 
 ### chess-tui-maia
 
-Maia-3 (5M) human-move predictor, driven via UCI. Uses Elo conditioning
+Maia-3 human-move predictor, driven via UCI. Uses Elo conditioning
 (`Elo` / `SelfElo` / `OppoElo`) plus the same `Temperature` / `TopP`
 sampling knobs as Nova. Exposes the same `POST /move` RESTful protocol as
 the other network players, so it can substitute for Nova in any TUI match.
 
 The `maia3` Python package is **not** a chess-tui dependency — it is
-installed separately. The server reads the `maia3-5m` (or equivalent)
-executable path from `engines.json` and spawns it as a long-lived UCI
-subprocess.
+installed separately. The server reads the `maia3-*` executable path
+(`maia3-5m`, `maia3-23m`, or `maia3-79m`) from `engines.json` and spawns
+it as a long-lived UCI subprocess.
+
+**Default model:** `maia3-79m` ("best accuracy" per the maia3 README).
+On Apple Silicon (M1/M2/M3/M4/M5) the server auto-selects MPS for
+inference, which makes 79M run in well under 100 ms per move. See
+[Device selection](#device-selection) below.
 
 ```bash
 uv run chess-tui-maia 8083 --elo 1500
@@ -211,7 +216,8 @@ uv run chess-tui --black http://localhost:8083
 from source. Pick one:
 
 ```bash
-# Recommended: uv tool install (puts maia3-5m, maia3-cache, etc. on PATH)
+# Recommended: uv tool install (puts maia3-5m, maia3-23m, maia3-79m,
+# maia3-cache, etc. on PATH)
 uv tool install 'maia3 @ git+https://github.com/CSSLab/maia3.git'
 
 # Or: pip (user-site, requires PATH to include the user bin)
@@ -223,19 +229,26 @@ cd maia3
 pip install .
 ```
 
-Then pre-download the 5M model so the first match doesn't time out
-waiting on Hugging Face:
+Then pre-download the model you want to use (so the first match doesn't
+time out waiting on Hugging Face):
 
 ```bash
+# Default 5M (smallest, fastest to download, ~20 MB)
 maia3-cache
+
+# 23M ("better accuracy", ~90 MB)
+maia3-cache --model maia3-23m
+
+# 79M ("best accuracy", ~300 MB — recommended on any modern Mac/Linux box)
+maia3-cache --model maia3-79m
 ```
 
-Then point `engines.json` at the executable (use the absolute path if
-`maia3-5m` is not on `PATH`):
+Then point `engines.json` at the executable (use the absolute path if the
+binary is not on `PATH`):
 
 ```json
 {
-  "maia": { "path": "maia3-5m" }
+  "maia": { "path": "maia3-79m" }
 }
 ```
 
@@ -256,6 +269,9 @@ uv run chess-tui-maia 8083 --elo 1500 --self-elo 1400 --oppo-elo 1800
 
 # Disable history mode (engine gets the FEN only, no move history)
 uv run chess-tui-maia 8083 --elo 1500 --no-use-history
+
+# Force CPU even on Apple Silicon (e.g. for benchmarks)
+uv run chess-tui-maia 8083 --elo 1500 --device cpu
 ```
 
 #### Nova vs. Maia match
@@ -298,6 +314,34 @@ definition of 1400, not a single ground truth.
   history to maia via `--use-uci-history`. On, the engine receives the
   last 8 board states as transformer context (matching training). Off,
   the engine sees only the current FEN.
+- `--device {auto,mps,cuda,cpu}` (default `auto`): torch device passed
+  to the maia subprocess. `auto` picks **MPS on Apple Silicon** (macOS +
+  arm64, M1+), **CUDA on Linux/Windows** (most common ML setup), **CPU
+  on Intel Macs**. The selected device and AMP state are printed in the
+  startup banner. maia3 only applies AMP under CUDA, so on MPS the
+  model runs in fp32 — still fast for the 79M.
+
+#### Device selection
+
+The host process (`chess-tui-maia`) is a thin HTTP wrapper; torch lives
+in maia3's separate venv, so we can't introspect it from here. Instead,
+`--device auto` uses platform heuristics:
+
+| Host | `--device auto` resolves to | Why |
+| --- | --- | --- |
+| macOS Apple Silicon (M1/M2/M3/M4/M5) | `mps` | 5–10× faster than CPU for 79M |
+| macOS Intel | `cpu` | No MPS, CUDA is rare on Mac |
+| Linux / Windows | `cuda` | Common ML setup; override with `--device cpu` if needed |
+
+If the heuristic is wrong, override explicitly. The chosen device is
+logged in the banner (`Device: mps | AMP: on`).
+
+For very large models (`UofTCSSLab/Maia3-110M`, `-270M`, `-1B`) the
+`maia3` package doesn't ship a preset binary — point
+`engines.json#maia.path` at `maia3-uci` and add the `--model
+https://huggingface.co/...` argument via `engines.json` (currently
+`chess-tui-maia` only forwards the standard flags, so for sizes beyond
+79M a small code change is needed).
 
 ## Configuration
 
@@ -403,7 +447,7 @@ Engine paths are configured in `engines.json`:
     "path": "path/to/nova_v3b.onnx"
   },
   "maia": {
-    "path": "maia3-5m"
+    "path": "maia3-79m"
   }
 }
 ```
