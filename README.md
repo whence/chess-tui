@@ -152,7 +152,7 @@ Nova neural network player. Uses per-move sampling knobs
 and style from a single ELO conditioning.
 
 ```bash
-uv run chess-tui-nova 8082 --elo 1500
+uv run chess-tui-nova --port 8082 --elo 1500
 uv run chess-tui --black http://localhost:8082
 ```
 
@@ -164,16 +164,16 @@ natural policy distribution — equivalent to
 
 ```bash
 # Greedy / engine-like: always play Nova's top move
-uv run chess-tui-nova 8082 --elo 1500 --temperature 0
+uv run chess-tui-nova --port 8082 --elo 1500 --temperature 0
 
 # Strong, focused: sharpen the distribution, restrict to top moves
-uv run chess-tui-nova 8082 --elo 2000 --temperature 0.6 --top-p 0.85
+uv run chess-tui-nova --port 8082 --elo 2000 --temperature 0.6 --top-p 0.85
 
 # Casual: slight randomness on top of Nova's distribution
-uv run chess-tui-nova 8082 --elo 1500 --temperature 1.1 --top-p 0.9
+uv run chess-tui-nova --port 8082 --elo 1500 --temperature 1.1 --top-p 0.9
 
 # Beginner: more random, plus occasional outright blunders
-uv run chess-tui-nova 8082 --elo 1000 --temperature 1.3 --top-p 0.95 --blunder-rate 0.05
+uv run chess-tui-nova --port 8082 --elo 1000 --temperature 1.3 --top-p 0.95 --blunder-rate 0.05
 ```
 
 #### Sampling knobs
@@ -206,7 +206,7 @@ inference, which makes 79M run in well under 100 ms per move. See
 [Device selection](#device-selection) below.
 
 ```bash
-uv run chess-tui-maia 8083 --elo 1500
+uv run chess-tui-maia --port 8083 --elo 1500
 uv run chess-tui --black http://localhost:8083
 ```
 
@@ -256,22 +256,22 @@ binary is not on `PATH`):
 
 ```bash
 # Default: maia's natural distribution at the requested Elo
-uv run chess-tui-maia 8083 --elo 1500
+uv run chess-tui-maia --port 8083 --elo 1500
 
 # Greedy
-uv run chess-tui-maia 8083 --elo 1500 --temperature 0
+uv run chess-tui-maia --port 8083 --elo 1500 --temperature 0
 
 # Stronger / more focused
-uv run chess-tui-maia 8083 --elo 2000 --temperature 0.6 --top-p 0.85
+uv run chess-tui-maia --port 8083 --elo 2000 --temperature 0.6 --top-p 0.85
 
 # Asymmetric match (self plays at one Elo, opponent at another)
-uv run chess-tui-maia 8083 --elo 1500 --self-elo 1400 --oppo-elo 1800
+uv run chess-tui-maia --port 8083 --elo 1500 --self-elo 1400 --oppo-elo 1800
 
 # Disable history mode (engine gets the FEN only, no move history)
-uv run chess-tui-maia 8083 --elo 1500 --no-use-history
+uv run chess-tui-maia --port 8083 --elo 1500 --no-use-history
 
 # Force CPU even on Apple Silicon (e.g. for benchmarks)
-uv run chess-tui-maia 8083 --elo 1500 --device cpu
+uv run chess-tui-maia --port 8083 --elo 1500 --device cpu
 ```
 
 #### Nova vs. Maia match
@@ -281,10 +281,10 @@ just two servers + the TUI pointing at both:
 
 ```bash
 # Terminal 1
-uv run chess-tui-nova 8082 --elo 1400
+uv run chess-tui-nova --port 8082 --elo 1400
 
 # Terminal 2
-uv run chess-tui-maia 8083 --elo 1400
+uv run chess-tui-maia --port 8083 --elo 1400
 
 # Terminal 3
 uv run chess-tui --white http://localhost:8082 --black http://localhost:8083
@@ -336,12 +336,14 @@ in maia3's separate venv, so we can't introspect it from here. Instead,
 If the heuristic is wrong, override explicitly. The chosen device is
 logged in the banner (`Device: mps | AMP: on`).
 
-For very large models (`UofTCSSLab/Maia3-110M`, `-270M`, `-1B`) the
-`maia3` package doesn't ship a preset binary — point
-`engines.json#maia.path` at `maia3-uci` and add the `--model
-https://huggingface.co/...` argument via `engines.json` (currently
-`chess-tui-maia` only forwards the standard flags, so for sizes beyond
-79M a small code change is needed).
+**Note on size:** the public Maia-3 family tops out at **79M** parameters
+(per the [paper](https://arxiv.org/abs/2605.19091) and the
+[HuggingFace collection](https://huggingface.co/collections/UofTCSSLab/maia3);
+the 5M, 23M, and 79M are the only presets the `maia3` package ships).
+If larger Maia-3 weights are released later, point
+`engines.json#maia.path` at `maia3-uci` and pass `--model
+https://huggingface.co/...` as a custom argument (will need a small
+`chess-tui-maia` code change to forward extra args).
 
 ## Configuration
 
@@ -396,10 +398,10 @@ response.
 uv run chess-tui-engine --port 8082 --engine plentychess --depth 20
 
 # Terminal 2: a different engine
-uv run chess-tui-nova 8083 --elo 1500
+uv run chess-tui-nova --port 8083 --elo 1500
 
 # Terminal 3: a third observer
-uv run chess-tui-maia 8084 --elo 1400
+uv run chess-tui-maia --port 8084 --elo 1400
 
 # Terminal 4: a local human plays white vs. stockfish, with nova + maia watching
 uv run chess-tui --black http://localhost:8082 \
