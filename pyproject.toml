@@ -18,6 +18,7 @@ chess-tui-net = "chess_tui.net_server:main"
 chess-tui-engine = "chess_tui.engine_server:main"
 chess-tui-nova = "chess_tui.nova_server:main"
 chess-tui-maia = "chess_tui.maia_server:main"
+starter = "chess_tui.starter:main"
 
 [build-system]
 requires = ["hatchling"]
