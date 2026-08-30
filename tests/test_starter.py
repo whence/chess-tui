@@ -1,7 +1,11 @@
 """Tests for the cmux starter wizard (chess_tui.starter).
 
-Interactive helpers are driven by monkeypatched ``input``; cmux is never
-touched (create_workspace / name_tabs are stubbed out).
+The opening step now launches a Textual picker, so :func:`pick_opening`
+is monkeypatched (the test seam) to return a fixed result instead of
+running Textual. The rest of the wizard (opponent side, Nova knobs,
+observer, confirm) still uses plain ``input()``, driven by the
+``feed`` helper. cmux itself is never touched (create_workspace /
+name_tabs are stubbed out).
 """
 
 from __future__ import annotations
@@ -14,10 +18,20 @@ def feed(monkeypatch, answers: list[str]) -> None:
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(it))
 
 
-# Fully-default flow with a Nova opponent: opening query, side, ELO,
-# temperature, top-p, blunder rate, classical, aggression, observer?,
-# confirm.
-ALL_DEFAULTS = ["", "", "", "", "", "", "", "", "", ""]
+def no_opening(monkeypatch) -> None:
+    """Stub the opening picker to return a standard game (None)."""
+    monkeypatch.setattr(starter, "pick_opening", lambda: None)
+
+
+def pick_opening(monkeypatch, opening) -> None:
+    """Stub the opening picker to return *opening* (an openings.Opening)."""
+    monkeypatch.setattr(starter, "pick_opening", lambda: opening)
+
+
+# Fully-default flow with a Nova opponent: side, ELO, temperature,
+# top-p, blunder rate, classical, aggression, observer?, confirm.
+# (The opening query is no longer read from input — see no_opening.)
+ALL_DEFAULTS = ["", "", "", "", "", "", "", "", ""]
 
 # Knob prompts after ELO (temperature, top-p, blunder, classical, aggression).
 KNOB_DEFAULTS = ["", "", "", "", ""]
@@ -27,6 +41,7 @@ def test_configure_standard_game_defaults(monkeypatch) -> None:
     """Default flow: you play white, Nova black, ELO 1500, starter-level
     temperature (0.1) and blunder rate (0.015)."""
     monkeypatch.setattr(starter, "free_port", lambda: 18081)
+    no_opening(monkeypatch)
     feed(monkeypatch, ALL_DEFAULTS)
     setup = starter.configure()
     assert setup.opening is None
@@ -39,10 +54,10 @@ def test_configure_standard_game_defaults(monkeypatch) -> None:
 
 
 def test_configure_no_opponent(monkeypatch) -> None:
+    no_opening(monkeypatch)
     feed(
         monkeypatch,
         [
-            "",  # opening: standard game
             "3",  # you play both sides
             "",  # observer: none (default)
             "",  # confirm: yes
@@ -60,10 +75,10 @@ def test_configure_with_observer_engine(monkeypatch) -> None:
     monkeypatch.setattr(
         starter, "_available_engines", lambda: ["plentychess", "stockfish", "dragon"]
     )
+    no_opening(monkeypatch)
     feed(
         monkeypatch,
         [
-            "",  # opening: standard game
             "3",  # you play both sides
             "y",  # add observer
             "2",  # observer: plentychess engine
@@ -88,10 +103,10 @@ def test_configure_with_observer_nova(monkeypatch) -> None:
     """Choosing 'Nova player' goes through the same settings as the
     opponent (ELO + knobs), and the observer command is a Nova server."""
     monkeypatch.setattr(starter, "free_port", lambda: 18082)
+    no_opening(monkeypatch)
     feed(
         monkeypatch,
         [
-            "",  # opening: standard game
             "3",  # you play both sides
             "y",  # add observer
             "1",  # observer: Nova player
@@ -125,11 +140,14 @@ def test_observer_defaults(monkeypatch) -> None:
 
 
 def test_configure_unique_opening_and_you_play_black(monkeypatch) -> None:
+    import chess_tui.openings as openings
+
     monkeypatch.setattr(starter, "free_port", lambda: 18081)
+    opening = openings.find("Four Knights Game: Italian Variation, Noa Gambit")[0]
+    pick_opening(monkeypatch, opening)
     feed(
         monkeypatch,
         [
-            "Four Knights Game: Italian Variation, Noa Gambit",  # query
             "2",  # you play black, Nova white
             "2000",  # ELO
             *KNOB_DEFAULTS,
@@ -149,14 +167,13 @@ def test_configure_unique_opening_and_you_play_black(monkeypatch) -> None:
 
 def test_configure_decline_then_confirm(monkeypatch) -> None:
     """Answering 'n' at the summary loops back into the wizard."""
+    no_opening(monkeypatch)
     feed(
         monkeypatch,
         [
-            "",  # query: standard game
             "3",  # you play both sides
             "n",  # confirm: decline -> reconfigure
-            "",  # query: standard game (second pass)
-            "3",  # you play both sides
+            "3",  # you play both sides (second pass)
             "",  # confirm: yes
         ],
     )
@@ -208,6 +225,13 @@ def _patch_main(monkeypatch, ws, closed, created) -> None:
     monkeypatch.setattr(starter, "close_workspace", lambda _ws: closed.append(_ws))
     monkeypatch.setattr(starter, "name_tabs", lambda _ref: None)
     monkeypatch.setattr(starter, "free_port", lambda: 18081)
+    # main() prints a line that reads the cmux env vars directly even
+    # though inside_cmux() is stubbed; set them so that line works.
+    monkeypatch.setenv("CMUX_WORKSPACE_ID", "ws-test")
+    monkeypatch.setenv("CMUX_SURFACE_ID", "surf-test")
+    # The opening picker is a Textual app; stub it to a standard game
+    # so main()'s configure() wizard stays on plain input().
+    no_opening(monkeypatch)
 
     def fake_create(setup):
         created.append(setup)
@@ -245,7 +269,6 @@ def test_main_close_then_create(monkeypatch) -> None:
         monkeypatch,
         [
             "",  # close existing workspace: default Y
-            "",  # opening: standard game
             "3",  # you play both sides
             "",  # observer: none
             "",  # confirm: yes
@@ -264,7 +287,6 @@ def test_main_without_existing_workspace_goes_straight_to_wizard(monkeypatch) ->
     feed(
         monkeypatch,
         [
-            "",  # opening: standard game
             "3",  # you play both sides
             "",  # observer: none
             "",  # confirm: yes
