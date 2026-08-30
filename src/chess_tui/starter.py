@@ -234,9 +234,12 @@ def pick_opening() -> "openings.Opening | None":
     """
     from .opening_picker import OpeningPickerApp  # noqa: PLC0415 - local import
 
+    print("\nOpening setup\n-------------")
+    if ask_yes_no("Start a standard game?", default=True):
+        print("starter: starting a standard game (start position).")
+        return None
+
     print(
-        "\nOpening setup\n"
-        "-------------\n"
         "Opening a Textual picker over the bundled catalog — "
         "type to search, Enter to select, Esc for a standard game."
     )
