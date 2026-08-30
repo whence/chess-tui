@@ -50,9 +50,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 WORKSPACE_NAME = "chess-tui-managed"
 
-# Number of options shown per page of the opening choice screen.
-OPENING_PAGE_SIZE = 12
-
 EXIT_OK = 0
 EXIT_NOT_IN_CMUX = 1
 EXIT_USER_DECLINED = 2
@@ -222,55 +219,31 @@ def _openings():
 
 
 def pick_opening() -> "openings.Opening | None":
-    """Guide the user to an opening via search + choice screens.
+    """Pick an opening with a Textual live-filter selector.
 
-    Returns an ``openings.Opening`` or ``None`` for a standard game. Empty
-    query starts a standard game; otherwise we substring-search the bundled
-    catalog (chess_tui.openings) and disambiguate with a numbered
-    multiple-choice screen, paged. Loops until the user either picks an
-    opening or chooses "no opening".
+    Launches :class:`chess_tui.opening_picker.OpeningPickerApp`, a
+    single-screen Textual app: a search box over the bundled catalog
+    with a selectable list that filters as you type.  Returns the
+    chosen ``openings.Opening``, or ``None`` when the user presses
+    Escape (interpreted as "standard game / start position").
+
+    Kept as a thin, separately-monkeypatchable function so tests can
+    drive :func:`configure` without launching Textual — they stub this
+    out and feed the rest of the wizard (opponent, Nova, observer) via
+    plain ``input()``.
     """
-    openings = _openings()
+    from .opening_picker import OpeningPickerApp  # noqa: PLC0415 - local import
+
+    print("\nOpening setup\n-------------")
+    if ask_yes_no("Start a standard game?", default=True):
+        print("starter: starting a standard game (start position).")
+        return None
 
     print(
-        "\nOpening setup\n"
-        "-------------\n"
-        "Press Enter to start a standard game, or type an opening name / "
-        "ECO code (e.g. 'najdorf', 'B90', "
-        "'Sicilian Defense') to search the bundled catalog."
+        "Opening a Textual picker over the bundled catalog — "
+        "type to search, Enter to select, Esc for a standard game."
     )
-
-    while True:
-        query = input("Opening query [Enter = standard game]: ").strip()
-        if not query:
-            return None
-
-        matches = openings.find(query)
-        if not matches:
-            print(f"No opening matches {query!r}. Try another query.")
-            continue
-
-        if len(matches) == 1:
-            print(f"Selected: {matches[0]}")
-            return matches[0]
-
-        page = matches[:OPENING_PAGE_SIZE]
-        options: list[str | tuple[str, object]] = [
-            (str(o), o) for o in page
-        ]
-        more = len(matches) - len(page)
-        if more > 0:
-            options.append((f"Refine search ({more} more not shown)", "refine"))
-        options.append(("No opening — start a standard game", None))
-
-        choice = choose(
-            f"{len(matches)} opening(s) match {query!r}:", options
-        )
-        if choice is None:
-            return None
-        if choice == "refine":
-            continue
-        return choice
+    return OpeningPickerApp().run()
 
 
 # --------------------------------------------------------------------------
